@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sdirstat — disk usage treemap</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0b0d12; color: #d7dbe3;
+    font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow: hidden; }
+  #top { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    border-bottom: 1px solid #1b2030; background: #0e1118; }
+  #crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; flex: 1; min-width: 0; }
+  .crumb { cursor: pointer; padding: 2px 8px; border-radius: 5px; background: #161b27;
+    border: 1px solid #232a3a; white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  .crumb:hover { background: #1d2434; }
+  .crumb.cur { background: #2a3550; border-color: #3a4a6e; color: #fff; }
+  #stat { color: #7c8597; white-space: nowrap; }
+  #up { cursor: pointer; padding: 3px 10px; border-radius: 5px; background: #1a2030;
+    border: 1px solid #2a3346; color: #aeb6c6; }
+  #up:hover { background: #232c40; }
+  #wrap { position: absolute; top: 41px; left: 0; right: 0; bottom: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #tip { position: fixed; pointer-events: none; z-index: 9; display: none; max-width: 380px;
+    background: #11151eF0; border: 1px solid #2c3550; border-radius: 6px; padding: 7px 9px;
+    box-shadow: 0 6px 24px #000a; }
+  #tip b { color: #fff; } #tip .sz { color: #7fd1a6; } #tip .pc { color: #c7a3ff; }
+  #tip .pa { color: #6f7a8d; word-break: break-all; }
+</style>
+</head>
+<body>
+<div id="top">
+  <div id="up" title="Go up (Backspace)">↑ up</div>
+  <div id="crumbs"></div>
+  <div id="stat"></div>
+</div>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<div id="tip"></div>
+<script>
+const ROOT = /*__DATA__*/;
+const SCAN_MS = "__SCANMS__", N_ENTRIES = "__NENTRIES__";
+
+// ---- helpers ----
+function human(b){ const U=["B","KB","MB","GB","TB","PB"]; let v=b,i=0;
+  while(v>=1024&&i<U.length-1){v/=1024;i++;} return (i?v.toFixed(1):v)+" "+U[i]; }
+const TAU = Math.PI*2;
+function hsl(h,s,l){ return `hsl(${h%360} ${s}% ${l}%)`; }
+
+// ---- state ----
+let path = [ROOT];                 // root → current
+let cur = () => path[path.length-1];
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const tip = document.getElementById('tip');
+let cells = [];                    // drawn rects for hit-testing (deepest last)
+let dpr = 1, CW=0, CH=0;
+
+// ---- squarified treemap (Bruls/Huizing/van Wijk) ----
+function worst(row, len){ const s=row.reduce((a,b)=>a+b,0);
+  const mx=Math.max(...row), mn=Math.min(...row);
+  return Math.max((len*len*mx)/(s*s), (s*s)/(len*len*mn)); }
+function squarify(items, rect, out){            // items: [{node, area}] desc by area
+  let i=0, r={...rect};
+  while(i<items.length){
+    let len=Math.min(r.w,r.h), row=[], sum=0, j=i, best=Infinity;
+    while(j<items.length){
+      const cand=row.concat([items[j].area]); const wr=worst(cand,len);
+      if(row.length===0 || wr<=best){ row=cand; best=wr; sum+=items[j].area; j++; }
+      else break;
+    }
+    const thick = sum/len;
+    if(r.w>=r.h){ let oy=r.y; for(let k=i;k<j;k++){ const hh=items[k].area/thick;
+        out.push({node:items[k].node, x:r.x, y:oy, w:thick, h:hh}); oy+=hh; }
+        r.x+=thick; r.w-=thick; }
+    else { let ox=r.x; for(let k=i;k<j;k++){ const ww=items[k].area/thick;
+        out.push({node:items[k].node, x:ox, y:r.y, w:ww, h:thick}); ox+=ww; }
+        r.y+=thick; r.h-=thick; }
+    i=j;
+  }
+}
+function childrenAreas(node, rect){
+  const kids=(node.c||[]).filter(k=>k.v>0);
+  if(!kids.length) return [];
+  kids.sort((a,b)=>b.v-a.v);
+  const tot=kids.reduce((s,k)=>s+k.v,0)||1, A=rect.w*rect.h;
+  const items=kids.map(k=>({node:k, area:k.v/tot*A}));
+  const out=[]; squarify(items, rect, out); return out;
+}
+
+// ---- draw ----
+function rrect(x,y,w,h,r){ r=Math.min(r,w/2,h/2); ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+function drawCell(c, hue, depth, chain){
+  const {x,y,w,h,node}=c;
+  if(w<1||h<1) return;
+  const isdir = node.d===1;
+  const light = isdir ? 30 - Math.min(depth*3,12) : 58;
+  const sat = isdir ? 42 : 30;
+  ctx.fillStyle = hsl(hue, sat, light);
+  rrect(x+0.5,y+0.5,w-1,h-1, 3); ctx.fill();
+  ctx.strokeStyle = "#0b0d1255"; ctx.lineWidth=1; ctx.stroke();
+  c.chain = chain; cells.push(c);
+  // nested: draw children of dirs that have room
+  let inner = null;
+  if(isdir && node.c && w>34 && h>24){
+    const head = Math.min(15, h*0.28);
+    inner = {x:x+3, y:y+head, w:w-6, h:h-head-3};
+    if(inner.w>6 && inner.h>6){
+      const sub = childrenAreas(node, inner);
+      for(const s of sub) drawCell(s, hue, depth+1, chain.concat([s.node]));
+    }
+  }
+  // label
+  const lh = (isdir && inner) ? Math.min(15,h*0.28) : h;
+  if(w>46 && lh>11){
+    ctx.fillStyle = light<45 ? "#cdd5e6" : "#10131b";
+    ctx.font = (isdir?"600 ":"")+"11px ui-monospace, monospace";
+    ctx.save(); ctx.beginPath(); ctx.rect(x+3,y,w-6,lh); ctx.clip();
+    const label = node.n + (w>120 ? "  "+human(node.v) : "");
+    ctx.fillText(label, x+5, y+ (inner? lh*0.5+3 : 13));
+    ctx.restore();
+  }
+}
+
+function render(){
+  cells=[];
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,CW,CH);
+  ctx.fillStyle="#0b0d12"; ctx.fillRect(0,0,CW,CH);
+  const top = childrenAreas(cur(), {x:6,y:6,w:CW-12,h:CH-12});
+  let hi=0;
+  for(const c of top){ const hue=(hi*47.5)%360; hi++; drawCell(c, hue, 0, [c.node]); }
+  drawCrumbs();
+}
+
+function drawCrumbs(){
+  const cr=document.getElementById('crumbs'); cr.innerHTML="";
+  path.forEach((n,idx)=>{
+    const d=document.createElement('div'); d.className="crumb"+(idx===path.length-1?" cur":"");
+    d.textContent = idx===0 ? (n.n||"/") : n.n;
+    d.onclick=()=>{ path=path.slice(0,idx+1); render(); };
+    cr.appendChild(d);
+    if(idx<path.length-1){ const s=document.createElement('span'); s.textContent="›"; s.style.color="#48506280"; cr.appendChild(s); }
+  });
+  document.getElementById('stat').textContent =
+    human(cur().v)+" · "+N_ENTRIES+" entries · "+SCAN_MS+" ms scan";
+}
+
+// ---- interaction ----
+function cellAt(mx,my){ // deepest (last drawn) wins
+  for(let k=cells.length-1;k>=0;k--){ const c=cells[k];
+    if(mx>=c.x&&mx<=c.x+c.w&&my>=c.y&&my<=c.y+c.h) return c; }
+  return null;
+}
+cv.addEventListener('mousemove', e=>{
+  const r=cv.getBoundingClientRect(), c=cellAt(e.clientX-r.left, e.clientY-r.top);
+  if(!c){ tip.style.display="none"; cv.style.cursor="default"; return; }
+  cv.style.cursor = c.node.d===1 ? "pointer":"default";
+  const pct = (100*c.node.v/cur().v).toFixed(1);
+  tip.innerHTML = `<b>${c.node.n}</b> ${c.node.d===1?"📁":""}<br>`+
+    `<span class=sz>${human(c.node.v)}</span> · <span class=pc>${pct}%</span> of view`;
+  tip.style.display="block";
+  let tx=e.clientX+14, ty=e.clientY+14;
+  if(tx+tip.offsetWidth>innerWidth) tx=e.clientX-tip.offsetWidth-14;
+  if(ty+tip.offsetHeight>innerHeight) ty=e.clientY-tip.offsetHeight-14;
+  tip.style.left=tx+"px"; tip.style.top=ty+"px";
+});
+cv.addEventListener('mouseleave', ()=> tip.style.display="none");
+cv.addEventListener('click', e=>{
+  const r=cv.getBoundingClientRect(), c=cellAt(e.clientX-r.left, e.clientY-r.top);
+  if(c && c.node.d===1 && c.node.c && c.node.c.length){ path = path.concat(c.chain); tip.style.display="none"; render(); }
+});
+function up(){ if(path.length>1){ path.pop(); render(); } }
+document.getElementById('up').onclick=up;
+window.addEventListener('keydown', e=>{ if(e.key==="Backspace"){ e.preventDefault(); up(); }});
+
+// ---- resize ----
+function resize(){ const w=cv.parentElement.clientWidth, h=cv.parentElement.clientHeight;
+  dpr=window.devicePixelRatio||1; CW=w; CH=h; cv.width=w*dpr; cv.height=h*dpr; render(); }
+window.addEventListener('resize', resize);
+resize();
+</script>
+</body>
+</html>

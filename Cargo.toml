@@ -1,0 +1,18 @@
+[package]
+name = "sdirstat"
+version = "0.1.0"
+edition = "2021"
+description = "Headless filesystem indexer — the directory tree as a Web (node = own st_blocks, adj = dir→children), the size fold = the B/U accumulator (preduce), the parallel walk = pmapAt (schedule-free). Emits the QDirStat cache format and a nested JSON tree (two fromTerm out-maps over one scanned Web). The zero-dep Rust replacement for the Perl qdirstat-cache-writer."
+
+# The backend is zero-dep — std only (the qwalk/swalk/collapse_wire ethic).
+[dependencies]
+
+[[bin]]
+name = "sdirstat"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"

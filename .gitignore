@@ -1,0 +1,9 @@
+/target
+/reference
+/.scratch
+/usr.html
+*.html
+!src/*.html
+*.log
+.scratch-*
+.clone-*
