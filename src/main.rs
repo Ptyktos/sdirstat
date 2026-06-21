@@ -603,8 +603,37 @@ fn serve(port: u16, cfg: Cfg) {
     }
 }
 
+const USAGE: &str = "\
+sdirstat — parallel disk-usage analyzer (treemap/sunburst web GUI + QDirStat cache)
+
+USAGE
+  sdirstat <path> [options]      scan a directory (default: writes report.html)
+  sdirstat serve [-p PORT]       live web GUI at http://127.0.0.1:PORT (default 8080)
+
+OUTPUT (default: a self-contained HTML treemap report)
+  --json                emit a nested JSON tree instead
+  --cache               emit a QDirStat v2.0 cache file (drop-in for qdirstat-cache-writer)
+  --total               print only the grand total (scan + fold, no serialization)
+  -o FILE               output path (default: report.html / tree.json / out.qdirstat.cache)
+
+SCAN
+  --threads N           worker threads (default: CPU count; 1 = single-threaded)
+  --max-depth N         maximum recursion depth (default 40)
+  --top K               children kept per directory in pruned output (default 80)
+  --apparent            count apparent size (st_size) instead of allocated blocks
+  --iouring             io_uring batched-statx backend (Linux x86_64; for cold/SSD scans)
+  -p, --port N          port for `serve` (default 8080)
+  -h, --help            show this help
+
+Sizes are allocated (st_blocks×512, like du/baobab) with hardlink dedup by default.
+The GUI binds 127.0.0.1 only. Full docs: README.md · SECURITY.md\n";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
+        print!("{USAGE}");
+        return;
+    }
     let mut root = ".".to_string();
     let mut out = String::new();
     let mut mode = "html";
