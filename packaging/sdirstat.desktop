@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=sdirstat
+GenericName=Disk Usage Analyzer
+Comment=Explore disk usage as an interactive treemap or sunburst
+Exec=sdirstat-gui
+Icon=sdirstat
+Terminal=false
+Categories=Utility;System;Filesystem;
+Keywords=disk;usage;treemap;sunburst;du;space;analyzer;

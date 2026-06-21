@@ -7,3 +7,5 @@
 *.log
 .scratch-*
 .clone-*
+/dist
+*.deb

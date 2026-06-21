@@ -9,13 +9,15 @@
 //!   sdirstat <root> --cache [-o out.qdirstat.cache]
 //!   flags: --max-depth N (default 40)  --top K (children kept per dir, default 80)
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use sdirstat::uring;
 use std::collections::{HashMap, HashSet};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -54,6 +56,7 @@ struct Cfg {
     iouring: bool,  // use the multi-threaded io_uring batched-statx backend
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const IOURING_QD: u32 = 256; // per-thread io_uring queue depth (in-flight statx)
 
 const HARD_CAP: usize = 8_000_000;
@@ -72,6 +75,59 @@ struct Rec {
     nlink: u64,
     is_dir: bool,
     is_link: bool,
+}
+
+/// Cross-platform per-entry metadata. Unix reads the full stat surface (blocks/uid/gid/perm/links);
+/// other platforms fall back to `std` (size + mtime only — allocated ≈ apparent, no hardlink dedup).
+struct FileMeta {
+    own: u64,
+    size: u64,
+    blocks: u64,
+    mtime: i64,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    nlink: u64,
+    dev: u64,
+    ino: u64,
+}
+
+#[cfg(unix)]
+fn read_meta(m: &std::fs::Metadata, apparent: bool) -> FileMeta {
+    use std::os::unix::fs::MetadataExt;
+    FileMeta {
+        own: if apparent { m.len() } else { m.blocks() * 512 },
+        size: m.len(), blocks: m.blocks(), mtime: m.mtime(),
+        uid: m.uid(), gid: m.gid(), mode: m.mode(), nlink: m.nlink(), dev: m.dev(), ino: m.ino(),
+    }
+}
+#[cfg(not(unix))]
+fn read_meta(m: &std::fs::Metadata, _apparent: bool) -> FileMeta {
+    let size = m.len();
+    let mtime = m.modified().ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    FileMeta {
+        own: size, size, blocks: (size + 511) / 512, mtime, uid: 0, gid: 0,
+        mode: if m.is_dir() { 0o040000 } else { 0o100000 }, nlink: 1, dev: 0, ino: 0,
+    }
+}
+
+/// Fill a root Node's own stat from the path (du counts the top dir itself). Cross-platform.
+fn fill_root(node: &mut Node, root: &Path, apparent: bool) {
+    if let Ok(m) = std::fs::symlink_metadata(root) {
+        let fm = read_meta(&m, apparent);
+        node.own = fm.own;
+        node.sub = fm.own;
+        node.size = fm.size;
+        node.blocks = fm.blocks;
+        node.mtime = fm.mtime;
+        node.uid = fm.uid;
+        node.gid = fm.gid;
+        node.mode = fm.mode;
+        node.nlink = fm.nlink;
+    }
 }
 
 /// The parallel Web walk — `pmapAt` over the directory web, schedule-free (`Web.preduce_schedule_free`):
@@ -133,17 +189,18 @@ fn parallel_scan(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
                                 // metadata() = lstat (no symlink follow): the entry's own stat.
                                 let rec = match ent.metadata() {
                                     Ok(m) => {
-                                        // metric: allocated (st_blocks×512, like du/baobab) by default,
-                                        // st_size with --apparent. Hardlinked inode's blocks counted once.
-                                        let mut own = if cfg.apparent { m.len() } else { m.blocks() * 512 };
-                                        if !is_dir && m.nlink() > 1
-                                            && !seen.lock().unwrap().insert((m.dev(), m.ino()))
+                                        // allocated (st_blocks×512, like du/baobab) by default, st_size with
+                                        // --apparent; a hardlinked inode's blocks counted once (unix only).
+                                        let fm = read_meta(&m, cfg.apparent);
+                                        let mut own = fm.own;
+                                        if !is_dir && fm.nlink > 1
+                                            && !seen.lock().unwrap().insert((fm.dev, fm.ino))
                                         {
                                             own = 0;
                                         }
-                                        Rec { id, parent: pid, name, own, size: m.len(), blocks: m.blocks(),
-                                              mtime: m.mtime(), uid: m.uid(), gid: m.gid(), mode: m.mode(),
-                                              nlink: m.nlink(), is_dir, is_link }
+                                        Rec { id, parent: pid, name, own, size: fm.size, blocks: fm.blocks,
+                                              mtime: fm.mtime, uid: fm.uid, gid: fm.gid, mode: fm.mode,
+                                              nlink: fm.nlink, is_dir, is_link }
                                     }
                                     Err(_) => Rec { id, parent: pid, name, own: 0, size: 0, blocks: 0,
                                               mtime: 0, uid: 0, gid: 0, mode: 0, nlink: 1, is_dir, is_link },
@@ -170,35 +227,7 @@ fn parallel_scan(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
     });
 
     // assemble the dense arena (ids are 0..n, each written exactly once)
-    let n = counter.load(Ordering::Relaxed);
-    let mut nodes: Vec<Node> = Vec::with_capacity(n);
-    nodes.resize_with(n, Node::empty);
-    // the root directory's own inode blocks count too (du counts the top dir itself)
-    let mut root_node = Node::empty();
-    root_node.name = root_name;
-    root_node.is_dir = true;
-    if let Ok(m) = std::fs::symlink_metadata(root) {
-        root_node.own = if cfg.apparent { m.len() } else { m.blocks() * 512 };
-        root_node.sub = root_node.own;
-        root_node.size = m.len();
-        root_node.blocks = m.blocks();
-        root_node.mtime = m.mtime();
-        root_node.uid = m.uid();
-        root_node.gid = m.gid();
-        root_node.mode = m.mode();
-        root_node.nlink = m.nlink();
-    }
-    nodes[0] = root_node;
-    for r in &recs {
-        for rec in r.lock().unwrap().drain(..) {
-            nodes[rec.id] = Node {
-                parent: rec.parent, name: rec.name, own: rec.own, sub: rec.own,
-                size: rec.size, blocks: rec.blocks, mtime: rec.mtime, uid: rec.uid,
-                gid: rec.gid, mode: rec.mode, nlink: rec.nlink, is_dir: rec.is_dir, is_link: rec.is_link,
-            };
-        }
-    }
-    nodes
+    assemble(counter.load(Ordering::Relaxed), &recs, root, root_name, cfg)
 }
 
 /// Place the per-thread Recs into the dense arena by id; stat the root dir itself (du counts it).
@@ -208,17 +237,7 @@ fn assemble(n: usize, recs: &[Mutex<Vec<Rec>>], root: &Path, root_name: String, 
     let mut root_node = Node::empty();
     root_node.name = root_name;
     root_node.is_dir = true;
-    if let Ok(m) = std::fs::symlink_metadata(root) {
-        root_node.own = if cfg.apparent { m.len() } else { m.blocks() * 512 };
-        root_node.sub = root_node.own;
-        root_node.size = m.len();
-        root_node.blocks = m.blocks();
-        root_node.mtime = m.mtime();
-        root_node.uid = m.uid();
-        root_node.gid = m.gid();
-        root_node.mode = m.mode();
-        root_node.nlink = m.nlink();
-    }
+    fill_root(&mut root_node, root, cfg.apparent);
     nodes[0] = root_node;
     for r in recs {
         for rec in r.lock().unwrap().drain(..) {
@@ -236,6 +255,7 @@ fn assemble(n: usize, recs: &[Mutex<Vec<Rec>>], root: &Path, root_name: String, 
 /// its own io_uring ring, batching **dirfd-relative `statx`** at depth `IOURING_QD`. The repeated
 /// per-entry syscall is merged into batched submissions; aggregate in-flight = threads × QD, the deep
 /// queue depth that saturates an SSD's random-read parallelism cold. Captures the full stat surface.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn parallel_scan_iouring(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
     let counter = AtomicUsize::new(1);
     let stack: Mutex<Vec<(PathBuf, usize, u32)>> = Mutex::new(vec![(root.to_path_buf(), 0, 1)]);
@@ -441,12 +461,14 @@ fn type_stats_json(nodes: &[Node]) -> String {
 }
 
 /// Dispatch to the chosen scan backend (std fstatat vs io_uring batched statx), same `Vec<Node>`.
+/// The io_uring backend is Linux/x86_64 only; everywhere else `--iouring` is a no-op (std backend).
 fn scan_backend(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
+    let _ = cfg.iouring;
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     if cfg.iouring {
-        parallel_scan_iouring(root, root_name, cfg)
-    } else {
-        parallel_scan(root, root_name, cfg)
+        return parallel_scan_iouring(root, root_name, cfg);
     }
+    parallel_scan(root, root_name, cfg)
 }
 
 /// Scan a path and return (tree JSON, type-stats JSON, entry count, scan ms). Shared by serve.
@@ -506,30 +528,65 @@ fn http_write(stream: &mut TcpStream, status: &str, ctype: &str, body: &[u8]) {
     let _ = stream.write_all(body);
 }
 
-/// A file action — reversible by default. `trash` uses `gio trash` (recoverable from the system
-/// trash); `open`/`reveal` shell out to `xdg-open`. No hard-delete: trash is reversible and the
-/// user empties it themselves. The server is localhost-only and the UI confirms before trashing.
+/// Open a path with the OS default handler (xdg-open / open / explorer).
+#[cfg(target_os = "linux")]
+fn open_with(path: &str) -> Result<(), String> {
+    Command::new("xdg-open").arg(path).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+#[cfg(target_os = "macos")]
+fn open_with(path: &str) -> Result<(), String> {
+    Command::new("open").arg(path).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+#[cfg(target_os = "windows")]
+fn open_with(path: &str) -> Result<(), String> {
+    Command::new("explorer").arg(path).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn open_with(_path: &str) -> Result<(), String> { Err("open not supported on this platform".into()) }
+
+/// Move a path to the system trash / Recycle Bin — reversible.
+#[cfg(target_os = "linux")]
+fn trash(path: &str) -> Result<String, String> {
+    let st = Command::new("gio").arg("trash").arg("--").arg(path).status().map_err(|e| e.to_string())?;
+    if st.success() { Ok("moved to trash".into()) } else { Err("gio trash failed".into()) }
+}
+#[cfg(target_os = "macos")]
+fn trash(path: &str) -> Result<String, String> {
+    let script = format!("tell application \"Finder\" to delete POSIX file \"{}\"", path.replace('"', "\\\""));
+    let st = Command::new("osascript").arg("-e").arg(script).status().map_err(|e| e.to_string())?;
+    if st.success() { Ok("moved to trash".into()) } else { Err("trash failed".into()) }
+}
+#[cfg(target_os = "windows")]
+fn trash(path: &str) -> Result<String, String> {
+    let p = path.replace('\'', "''");
+    let ps = format!(
+        "Add-Type -AssemblyName Microsoft.VisualBasic; if (Test-Path -PathType Container '{0}') {{ \
+         [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory('{0}','OnlyErrorDialogs','SendToRecycleBin') }} else {{ \
+         [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('{0}','OnlyErrorDialogs','SendToRecycleBin') }}", p);
+    let st = Command::new("powershell").args(["-NoProfile", "-Command", &ps]).status().map_err(|e| e.to_string())?;
+    if st.success() { Ok("moved to trash".into()) } else { Err("trash failed".into()) }
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn trash(_path: &str) -> Result<String, String> { Err("trash not supported on this platform".into()) }
+
+/// A file action — reversible by default. `trash` goes to the system trash/Recycle Bin (recoverable);
+/// `open`/`reveal` use the OS default handler. No hard-delete: trash is reversible and the user empties
+/// it themselves. The server is localhost-only and the UI confirms before trashing.
 fn run_action(op: &str, path: &str) -> Result<String, String> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !path.starts_with('/') || path == "/" || path == home {
+    let p = Path::new(path);
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_default();
+    if path.is_empty() || !p.is_absolute() || p.parent().is_none() || path == home {
         return Err("refused: unsafe or invalid path".into());
     }
-    if !Path::new(path).exists() {
+    if !p.exists() {
         return Err("path does not exist".into());
     }
     match op {
-        "trash" => {
-            let st = Command::new("gio").arg("trash").arg("--").arg(path).status().map_err(|e| e.to_string())?;
-            if st.success() { Ok("moved to trash".into()) } else { Err("gio trash failed".into()) }
-        }
-        "open" => {
-            Command::new("xdg-open").arg(path).spawn().map_err(|e| e.to_string())?;
-            Ok("opened".into())
-        }
+        "trash" => trash(path),
+        "open" => open_with(path).map(|_| "opened".into()),
         "reveal" => {
-            let dir = Path::new(path).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into());
-            Command::new("xdg-open").arg(&dir).spawn().map_err(|e| e.to_string())?;
-            Ok("revealed".into())
+            let dir = p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+            open_with(&dir).map(|_| "revealed".into())
         }
         _ => Err("unknown action".into()),
     }

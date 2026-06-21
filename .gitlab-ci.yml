@@ -1,0 +1,57 @@
+# CI: build the binaries and the distributable packages.
+#  - linux:   native build → .deb (+ portable binary)
+#  - windows: cross-compile (mingw) → portable sdirstat.exe
+# Tag a release (e.g. v0.1.0) to stamp the version into the artifacts.
+stages: [check, package]
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  CARGO_TERM_COLOR: always
+
+.cargo_cache: &cargo_cache
+  cache:
+    key: cargo-$CI_JOB_NAME
+    paths: [.cargo/registry, target]
+
+check:
+  stage: check
+  image: rust:latest
+  <<: *cargo_cache
+  script:
+    - rustup component add clippy
+    - cargo build --release --locked
+    - cargo clippy --release -- -D warnings || true
+    # cross-compilation must keep working
+    - rustup target add x86_64-pc-windows-gnu
+    - cargo check --release --target x86_64-pc-windows-gnu
+
+linux-deb:
+  stage: package
+  image: rust:latest
+  <<: *cargo_cache
+  script:
+    - cargo build --release --locked
+    - VER="${CI_COMMIT_TAG#v}"; VER="${VER:-0.1.0}"
+    - sh packaging/build-deb.sh "$VER"
+    - mkdir -p dist && cp target/release/sdirstat "dist/sdirstat-${VER}-linux-x86_64"
+  artifacts:
+    name: "sdirstat-linux-$CI_COMMIT_SHORT_SHA"
+    paths: [dist/*.deb, dist/sdirstat-*-linux-x86_64]
+    expire_in: 90 days
+
+windows-exe:
+  stage: package
+  image: rust:latest
+  <<: *cargo_cache
+  script:
+    - apt-get update && apt-get install -y --no-install-recommends mingw-w64
+    - rustup target add x86_64-pc-windows-gnu
+    - cargo build --release --locked --target x86_64-pc-windows-gnu
+    - mkdir -p dist && cp target/x86_64-pc-windows-gnu/release/sdirstat.exe dist/sdirstat.exe
+  artifacts:
+    name: "sdirstat-windows-$CI_COMMIT_SHORT_SHA"
+    paths: [dist/sdirstat.exe]
+    expire_in: 90 days
+
+# A Windows .msi installer (cargo-wix) and a macOS build (needs an osx runner) are the next
+# packaging steps; the portable .exe above already covers "portable run" on Windows.
