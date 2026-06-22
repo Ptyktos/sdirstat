@@ -99,6 +99,40 @@ pub fn fold<A, B>(op: impl Fn(&A, B) -> B, init: B, xs: &[A]) -> B {
     xs.iter().rfold(init, |acc, x| op(x, acc))
 }
 
+/// CSR adjacency — the Graph face (the 4th merge, `link`) on the dense array
+/// carrier the CARRIER NOTE prescribes: instead of `n` little `Vec`s (a Vec-of-
+/// lists, `n` heap allocations), one flat `edges` array + per-node `off`sets.
+/// `of(p)` is `p`'s child slice, contiguous — so the consumer (the emit walk)
+/// reads children sequentially instead of chasing scattered little vecs.
+pub struct Csr {
+    off: Vec<usize>,   // len n+1; children of p live at edges[off[p]..off[p+1]]
+    edges: Vec<usize>,
+}
+
+impl Csr {
+    /// Build from a parent map over dense ids `0..n` (node 0 is the root; its own
+    /// parent entry is ignored). The canonical CSR fold: count → prefix-sum →
+    /// scatter, three flat passes, zero per-node allocation. Children land in
+    /// ascending id order (same as `Vec::push` in an id loop), so output is
+    /// unchanged.
+    pub fn from_parents(n: usize, parent_of: impl Fn(usize) -> usize) -> Csr {
+        let mut off = vec![0usize; n + 1];
+        (1..n).for_each(|i| off[parent_of(i) + 1] += 1); // count: edges per parent (the acc merge)
+        (0..n).for_each(|i| off[i + 1] += off[i]); // prefix-sum → start offsets (the scan)
+        let mut edges = vec![0usize; off[n]];
+        let mut cur = off[..n].to_vec();
+        (1..n).for_each(|i| {
+            let p = parent_of(i);
+            edges[cur[p]] = i; // scatter each child to its parent's running cursor
+            cur[p] += 1;
+        });
+        Csr { off, edges }
+    }
+    pub fn of(&self, p: usize) -> &[usize] {
+        &self.edges[self.off[p]..self.off[p + 1]]
+    }
+}
+
 const HEX_UP: &[u8; 16] = b"0123456789ABCDEF";
 const HEX_LO: &[u8; 16] = b"0123456789abcdef";
 
