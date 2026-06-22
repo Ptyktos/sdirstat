@@ -56,6 +56,7 @@ struct Cfg {
     no_stat: bool,  // skip the per-entry stat — to isolate readdir+userspace cost (benchmarking only)
     iouring: bool,  // use the multi-threaded io_uring batched-statx backend
     max_entries: usize, // OOM guard: stop descending past this many entries (0/flag → usize::MAX = unlimited)
+    one_fs: bool,   // --one-file-system: don't cross mount boundaries (du -x) — skips /proc,/sys,/mnt on /
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -120,6 +121,18 @@ fn read_meta(m: &std::fs::Metadata, _apparent: bool) -> FileMeta {
     }
 }
 
+/// The device id of a path (`st_dev`) — the mount-boundary key for `--one-file-system`. On non-unix
+/// there is no `st_dev`, so it is 0 and `--one-file-system` is a no-op (everything reads as same-fs).
+#[cfg(unix)]
+fn path_dev(p: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(p).map(|m| m.dev()).unwrap_or(0)
+}
+#[cfg(not(unix))]
+fn path_dev(_p: &Path) -> u64 {
+    0
+}
+
 /// Fill a root Node's own stat from the path (du counts the top dir itself). Cross-platform.
 fn fill_root(node: &mut Node, root: &Path, apparent: bool) {
     if let Ok(m) = std::fs::symlink_metadata(root) {
@@ -148,6 +161,7 @@ fn parallel_scan(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
     use std::collections::VecDeque;
     let counter = AtomicUsize::new(1); // 0 = root
     let active = AtomicUsize::new(1);
+    let root_dev = path_dev(root); // --one-file-system: descend only into children on this device
     // hardlink dedup: a multiply-linked inode's blocks are counted once (like du/qdirstat).
     // Only touched for nlink>1 entries, so the lock is cold for the overwhelming majority.
     let seen: Mutex<HashSet<(u64, u64)>> = Mutex::new(HashSet::new());
@@ -208,11 +222,18 @@ fn parallel_scan(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
                                     continue;
                                 }
                                 // metadata() = lstat (no symlink follow): the entry's own stat.
+                                let mut descend = is_dir && !is_link;
                                 let rec = match ent.metadata() {
                                     Ok(m) => {
                                         // allocated (st_blocks×512, like du/baobab) by default, st_size with
                                         // --apparent; a hardlinked inode's blocks counted once (unix only).
                                         let fm = read_meta(&m, cfg.apparent);
+                                        // --one-file-system: a child on a different device is a mount point —
+                                        // count its own dir entry but don't cross into it (du -x). This is what
+                                        // keeps a `/` scan out of /proc, /sys, /dev and off the other disks.
+                                        if cfg.one_fs && fm.dev != root_dev {
+                                            descend = false;
+                                        }
                                         let mut own = fm.own;
                                         if !is_dir && fm.nlink > 1
                                             && !seen.lock().unwrap().insert((fm.dev, fm.ino))
@@ -227,7 +248,7 @@ fn parallel_scan(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
                                               mtime: 0, uid: 0, gid: 0, mode: 0, nlink: 1, is_dir, is_link },
                                 };
                                 local.push(rec);
-                                if is_dir && !is_link {
+                                if descend {
                                     childdirs.push((ent.path(), id, depth + 1));
                                 }
                             }
@@ -283,6 +304,7 @@ fn parallel_scan_iouring(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node>
     let stack: Mutex<Vec<(PathBuf, usize, u32)>> = Mutex::new(vec![(root.to_path_buf(), 0, 1)]);
     let active = AtomicUsize::new(1);
     let cv = Condvar::new();
+    let root_dev = path_dev(root); // --one-file-system: descend only into children on this device
     let seen: Mutex<HashSet<(u64, u64)>> = Mutex::new(HashSet::new());
     let nthreads = if cfg.threads > 0 {
         cfg.threads
@@ -365,7 +387,9 @@ fn parallel_scan_iouring(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node>
                                         r.mtime = st.mtime; r.uid = st.uid; r.gid = st.gid;
                                         r.mode = st.mode; r.nlink = st.nlink;
                                         r.is_dir = st.is_dir; r.is_link = st.is_link;
-                                        if st.is_dir && !st.is_link && depth + 1 < cfg.max_depth {
+                                        if st.is_dir && !st.is_link && depth + 1 < cfg.max_depth
+                                            && (!cfg.one_fs || st.dev == root_dev)
+                                        {
                                             let mut cp = dir.clone();
                                             cp.push(OsStr::from_bytes(&entries[i].0));
                                             childdirs.push((cp, base + i, depth + 1));
@@ -799,7 +823,7 @@ fn parse_qdirstat_cache(text: &str) -> Vec<Node> {
 fn import_file(file: &str, label: &str) -> Result<String, String> {
     let content = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
     let t = content.trim_start();
-    let cfg = Cfg { max_depth: 1 << 20, top: 1 << 20, threads: 1, apparent: false, no_stat: false, iouring: false, max_entries: usize::MAX };
+    let cfg = Cfg { max_depth: 1 << 20, top: 1 << 20, threads: 1, apparent: false, no_stat: false, iouring: false, max_entries: usize::MAX, one_fs: false };
     if t.starts_with("[qdirstat") {
         let (resp, total, n) = finish(parse_qdirstat_cache(&content), 0.0, &cfg);
         Ok(save_report(label, file, "cache", &resp, total, n))
@@ -1045,6 +1069,7 @@ SCAN
                         and leaves the scan INCOMPLETE — raise it for a whole-/ scan
   --top K               children kept per directory in pruned output (default 80)
   --apparent            count apparent size (st_size) instead of allocated blocks
+  -x, --one-file-system stay on the root filesystem (du -x): skips /proc,/sys,/dev and other mounts
   --iouring             io_uring batched-statx backend (Linux x86_64; for cold/SSD scans)
   -p, --port N          port for `serve` (default 8080)
   -h, --help            show this help
@@ -1062,7 +1087,7 @@ fn main() {
     let mut out = String::new();
     let mut mode = "html";
     let mut port: u16 = 8080;
-    let mut cfg = Cfg { max_depth: 40, top: 80, threads: 0, apparent: false, no_stat: false, iouring: false, max_entries: DEFAULT_MAX_ENTRIES };
+    let mut cfg = Cfg { max_depth: 40, top: 80, threads: 0, apparent: false, no_stat: false, iouring: false, max_entries: DEFAULT_MAX_ENTRIES, one_fs: false };
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1082,6 +1107,7 @@ fn main() {
                 let v = it.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(DEFAULT_MAX_ENTRIES);
                 cfg.max_entries = if v == 0 { usize::MAX } else { v }; // 0 = unlimited
             }
+            "--one-file-system" | "-x" => cfg.one_fs = true,
             s if !s.starts_with('-') => root = s.to_string(),
             _ => {}
         }
