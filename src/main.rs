@@ -22,7 +22,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::Mutex;
 
 struct Node {
     parent: usize,
@@ -300,10 +300,9 @@ fn assemble(n: usize, recs: &[Mutex<Vec<Rec>>], root: &Path, root_name: String, 
 /// queue depth that saturates an SSD's random-read parallelism cold. Captures the full stat surface.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn parallel_scan_iouring(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
+    use std::collections::VecDeque;
     let counter = AtomicUsize::new(1);
-    let stack: Mutex<Vec<(PathBuf, usize, u32)>> = Mutex::new(vec![(root.to_path_buf(), 0, 1)]);
     let active = AtomicUsize::new(1);
-    let cv = Condvar::new();
     let root_dev = path_dev(root); // --one-file-system: descend only into children on this device
     let seen: Mutex<HashSet<(u64, u64)>> = Mutex::new(HashSet::new());
     let nthreads = if cfg.threads > 0 {
@@ -311,12 +310,16 @@ fn parallel_scan_iouring(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node>
     } else {
         std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8)
     };
+    // per-thread frontiers + work-stealing (same as the std backend — no global stack/Condvar)
+    let deques: Vec<Mutex<VecDeque<(PathBuf, usize, u32)>>> =
+        (0..nthreads).map(|_| Mutex::new(VecDeque::new())).collect();
+    deques[0].lock().unwrap().push_back((root.to_path_buf(), 0, 1));
     let recs: Vec<Mutex<Vec<Rec>>> = (0..nthreads).map(|_| Mutex::new(Vec::new())).collect();
 
     std::thread::scope(|sc| {
         for t in 0..nthreads {
-            let (stack, active, cv, counter, recs, cfg, seen) =
-                (&stack, &active, &cv, &counter, &recs, &cfg, &seen);
+            let (deques, active, counter, recs, cfg, seen) =
+                (&deques, &active, &counter, &recs, &cfg, &seen);
             sc.spawn(move || unsafe {
                 let ring = uring::Ring::setup(IOURING_QD);
                 let qd = IOURING_QD as usize;
@@ -329,14 +332,25 @@ fn parallel_scan_iouring(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node>
 
                 loop {
                     let item = {
-                        let mut s = stack.lock().unwrap();
-                        loop {
-                            if let Some(it) = s.pop() { break Some(it); }
-                            if active.load(Ordering::SeqCst) == 0 { break None; }
-                            s = cv.wait(s).unwrap();
+                        let mut got = deques[t].lock().unwrap().pop_back();
+                        if got.is_none() {
+                            for off in 1..nthreads {
+                                let v = (t + off) % nthreads;
+                                if let Some(x) = deques[v].lock().unwrap().pop_front() {
+                                    got = Some(x);
+                                    break;
+                                }
+                            }
                         }
+                        got
                     };
-                    let Some((dir, pid, depth)) = item else { break };
+                    let Some((dir, pid, depth)) = item else {
+                        if active.load(Ordering::SeqCst) == 0 {
+                            break;
+                        }
+                        std::thread::yield_now();
+                        continue;
+                    };
                     let mut childdirs: Vec<(PathBuf, usize, u32)> = Vec::new();
 
                     if depth < cfg.max_depth && counter.load(Ordering::Relaxed) < cfg.max_entries {
@@ -403,12 +417,13 @@ fn parallel_scan_iouring(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node>
                             local.extend(rl);
                         }
                     }
-                    let mut s = stack.lock().unwrap();
                     let nc = childdirs.len();
-                    for c in childdirs { s.push(c); }
+                    {
+                        let mut d = deques[t].lock().unwrap();
+                        for c in childdirs { d.push_back(c); }
+                    }
                     active.fetch_add(nc, Ordering::SeqCst);
                     active.fetch_sub(1, Ordering::SeqCst);
-                    cv.notify_all();
                 }
                 *recs[t].lock().unwrap() = local;
             });
