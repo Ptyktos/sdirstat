@@ -157,14 +157,24 @@ impl Acc {
     /// other byte passes through **raw**. (The old `esc` round-tripped each
     /// byte through `char`, which re-encoded UTF-8 continuation bytes ≥0x80 to
     /// two bytes — corrupting non-ASCII names. Raw passthrough is the fix.)
+    ///
+    /// Common-case fast path: the escape triggers are all bytes < 0x21 or `%` —
+    /// no UTF-8 lead/continuation byte (≥0x80) is one — so a single byte scan
+    /// decides the whole string. Almost no name needs escaping, so almost every
+    /// name is one `extend_from_slice` (memcpy) instead of a per-byte branch.
     pub fn esc(&mut self, s: &str) -> &mut Self {
-        s.bytes().for_each(|b| {
-            if b <= 0x20 || b == b'%' {
+        let b = s.as_bytes();
+        if !b.iter().any(|&c| c <= 0x20 || c == b'%') {
+            self.buf.extend_from_slice(b);
+            return self;
+        }
+        b.iter().for_each(|&c| {
+            if c <= 0x20 || c == b'%' {
                 self.buf.push(b'%');
-                self.buf.push(HEX_UP[(b >> 4) as usize]);
-                self.buf.push(HEX_UP[(b & 0xF) as usize]);
+                self.buf.push(HEX_UP[(c >> 4) as usize]);
+                self.buf.push(HEX_UP[(c & 0xF) as usize]);
             } else {
-                self.buf.push(b);
+                self.buf.push(c);
             }
         });
         self
@@ -173,8 +183,15 @@ impl Acc {
     /// JSON string escape, folded into the buffer (the other emit face's escape):
     /// `" \ \n \r \t` map to their JSON forms, other control bytes to `\u00XX`,
     /// everything else passes through as its raw UTF-8. Matches the old
-    /// `json_escape`'s output byte-for-byte.
+    /// `json_escape`'s output byte-for-byte. Same fast-path reasoning as `esc`:
+    /// the triggers (`"`, `\`, bytes < 0x20) are never a UTF-8 ≥0x80 byte, so a
+    /// byte scan settles it and a clean name is one bulk copy.
     pub fn esc_json(&mut self, s: &str) -> &mut Self {
+        let b = s.as_bytes();
+        if !b.iter().any(|&c| c < 0x20 || c == b'"' || c == b'\\') {
+            self.buf.extend_from_slice(b);
+            return self;
+        }
         s.chars().for_each(|c| match c {
             '"' => self.buf.extend_from_slice(b"\\\""),
             '\\' => self.buf.extend_from_slice(b"\\\\"),
