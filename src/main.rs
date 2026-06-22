@@ -55,12 +55,17 @@ struct Cfg {
     apparent: bool, // false = allocated (st_blocks×512, like du/baobab); true = st_size
     no_stat: bool,  // skip the per-entry stat — to isolate readdir+userspace cost (benchmarking only)
     iouring: bool,  // use the multi-threaded io_uring batched-statx backend
+    max_entries: usize, // OOM guard: stop descending past this many entries (0/flag → usize::MAX = unlimited)
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const IOURING_QD: u32 = 256; // per-thread io_uring queue depth (in-flight statx)
 
-const HARD_CAP: usize = 8_000_000;
+// Default entry ceiling — an OOM guard, not a silent truncation: when the walk hits it, it stops
+// descending and `main` warns LOUDLY that the scan is incomplete (a whole `/` is ~8–12M entries, so
+// the old 8M default silently truncated it). ~120 B/node, so ~4 GB of nodes here; raise with
+// `--max-entries N` (0 = unlimited) when scanning a bigger tree on a box with the RAM for it.
+const DEFAULT_MAX_ENTRIES: usize = 32_000_000;
 
 struct Rec {
     id: usize,
@@ -187,7 +192,7 @@ fn parallel_scan(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
                         continue;
                     };
                     let mut childdirs: Vec<(PathBuf, usize, u32)> = Vec::new();
-                    if depth < cfg.max_depth && counter.load(Ordering::Relaxed) < HARD_CAP {
+                    if depth < cfg.max_depth && counter.load(Ordering::Relaxed) < cfg.max_entries {
                         if let Ok(rd) = std::fs::read_dir(&dir) {
                             for ent in rd.flatten() {
                                 let Ok(ft) = ent.file_type() else { continue };
@@ -312,7 +317,7 @@ fn parallel_scan_iouring(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node>
                     let Some((dir, pid, depth)) = item else { break };
                     let mut childdirs: Vec<(PathBuf, usize, u32)> = Vec::new();
 
-                    if depth < cfg.max_depth && counter.load(Ordering::Relaxed) < HARD_CAP {
+                    if depth < cfg.max_depth && counter.load(Ordering::Relaxed) < cfg.max_entries {
                         let mut cpath = dir.as_os_str().as_bytes().to_vec();
                         cpath.push(0);
                         let dfd = uring::open_dir(&cpath);
@@ -798,7 +803,7 @@ fn parse_qdirstat_cache(text: &str) -> Vec<Node> {
 fn import_file(file: &str, label: &str) -> Result<String, String> {
     let content = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
     let t = content.trim_start();
-    let cfg = Cfg { max_depth: 1 << 20, top: 1 << 20, threads: 1, apparent: false, no_stat: false, iouring: false };
+    let cfg = Cfg { max_depth: 1 << 20, top: 1 << 20, threads: 1, apparent: false, no_stat: false, iouring: false, max_entries: usize::MAX };
     if t.starts_with("[qdirstat") {
         let (resp, total, n) = finish(parse_qdirstat_cache(&content), 0.0, &cfg);
         Ok(save_report(label, file, "cache", &resp, total, n))
@@ -1040,6 +1045,8 @@ OUTPUT (default: a self-contained HTML treemap report)
 SCAN
   --threads N           worker threads (default: CPU count; 1 = single-threaded)
   --max-depth N         maximum recursion depth (default 40)
+  --max-entries N       OOM-guard entry ceiling (default 32M; 0 = unlimited). Hitting it warns
+                        and leaves the scan INCOMPLETE — raise it for a whole-/ scan
   --top K               children kept per directory in pruned output (default 80)
   --apparent            count apparent size (st_size) instead of allocated blocks
   --iouring             io_uring batched-statx backend (Linux x86_64; for cold/SSD scans)
@@ -1059,7 +1066,7 @@ fn main() {
     let mut out = String::new();
     let mut mode = "html";
     let mut port: u16 = 8080;
-    let mut cfg = Cfg { max_depth: 40, top: 80, threads: 0, apparent: false, no_stat: false, iouring: false };
+    let mut cfg = Cfg { max_depth: 40, top: 80, threads: 0, apparent: false, no_stat: false, iouring: false, max_entries: DEFAULT_MAX_ENTRIES };
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1075,6 +1082,10 @@ fn main() {
             "--max-depth" => cfg.max_depth = it.next().and_then(|s| s.parse().ok()).unwrap_or(40),
             "--top" => cfg.top = it.next().and_then(|s| s.parse().ok()).unwrap_or(80),
             "--threads" => cfg.threads = it.next().and_then(|s| s.parse().ok()).unwrap_or(0),
+            "--max-entries" => {
+                let v = it.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(DEFAULT_MAX_ENTRIES);
+                cfg.max_entries = if v == 0 { usize::MAX } else { v }; // 0 = unlimited
+            }
             s if !s.starts_with('-') => root = s.to_string(),
             _ => {}
         }
@@ -1111,6 +1122,12 @@ fn main() {
     let total = nodes[0].sub;
     let fold_ms = ms(t_fold);
     eprintln!("scanned {} entries · {} · scan {scan_ms:.0} ms · fold {fold_ms:.0} ms", nodes.len(), human(total));
+    // No silent caps: if the walk stopped descending at the entry ceiling, the tree (and the total)
+    // is INCOMPLETE — say so loudly, don't hand back a partial number as if it were the answer.
+    if nodes.len() >= cfg.max_entries {
+        eprintln!("⚠ WARNING: hit the {}-entry ceiling — the scan is INCOMPLETE (stopped descending). \
+                   Totals are a lower bound. Raise it with --max-entries N (0 = unlimited).", cfg.max_entries);
+    }
 
     // scan + fold only (the fair comparison vs total-only tools like diskus/du -s) — no serialize
     if mode == "total" {
