@@ -9,6 +9,7 @@
 //!   sdirstat <root> --cache [-o out.qdirstat.cache]
 //!   flags: --max-depth N (default 40)  --top K (children kept per dir, default 80)
 
+use sdirstat::hash;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use sdirstat::uring;
 use std::collections::{HashMap, HashSet};
@@ -130,15 +131,18 @@ fn fill_root(node: &mut Node, root: &Path, apparent: bool) {
     }
 }
 
-/// The parallel Web walk — `pmapAt` over the directory web, schedule-free (`Web.preduce_schedule_free`):
-/// a shared work-queue of directories drained by N workers. Node ids are handed out by one atomic
-/// counter, and a dir's id is always allocated *before* it is processed, so parent_id < child_id
-/// still holds — the size fold stays one reverse pass, independent of which thread saw what when.
+/// The parallel Web walk — `pmapAt` over the directory web, schedule-free (`Web.preduce_schedule_free`).
+/// Each worker owns a `VecDeque` frontier (push/pop its own back end, DFS) and only reaches into
+/// another worker's deque when its own runs dry — work-stealing, so the single global work-stack lock
+/// (the coupling every thread hit twice per dir) is gone: N rarely-contended locks, not 1 always-
+/// contended one. Node ids are handed out by one atomic counter, and a dir's id is always allocated
+/// *before* it is processed, so parent_id < child_id still holds — the size fold stays one reverse
+/// pass, independent of which thread saw what when. Termination rides `active` (count of dirs queued-
+/// or-in-flight): it reaches 0 only once every pushed dir has been processed, so no work can strand.
 fn parallel_scan(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
+    use std::collections::VecDeque;
     let counter = AtomicUsize::new(1); // 0 = root
-    let stack: Mutex<Vec<(PathBuf, usize, u32)>> = Mutex::new(vec![(root.to_path_buf(), 0, 1)]);
     let active = AtomicUsize::new(1);
-    let cv = Condvar::new();
     // hardlink dedup: a multiply-linked inode's blocks are counted once (like du/qdirstat).
     // Only touched for nlink>1 entries, so the lock is cold for the overwhelming majority.
     let seen: Mutex<HashSet<(u64, u64)>> = Mutex::new(HashSet::new());
@@ -147,29 +151,41 @@ fn parallel_scan(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
     } else {
         std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8)
     };
+    // per-thread frontiers (the sharded work-stack) + per-thread output buckets
+    let deques: Vec<Mutex<VecDeque<(PathBuf, usize, u32)>>> =
+        (0..nthreads).map(|_| Mutex::new(VecDeque::new())).collect();
+    deques[0].lock().unwrap().push_back((root.to_path_buf(), 0, 1)); // seed the root on worker 0
     let recs: Vec<Mutex<Vec<Rec>>> = (0..nthreads).map(|_| Mutex::new(Vec::new())).collect();
 
     std::thread::scope(|sc| {
         for t in 0..nthreads {
-            let (stack, active, cv, counter, recs, cfg, seen) =
-                (&stack, &active, &cv, &counter, &recs, &cfg, &seen);
+            let (deques, active, counter, recs, cfg, seen) =
+                (&deques, &active, &counter, &recs, &cfg, &seen);
             sc.spawn(move || {
                 let mut local: Vec<Rec> = Vec::new();
                 loop {
-                    // pop a directory, or exit when the whole web is drained
+                    // get a dir: own frontier (DFS, back), else steal one shallow item (front) from a
+                    // victim. Nothing anywhere + drained ⇒ exit; nothing yet ⇒ yield and retry.
                     let item = {
-                        let mut s = stack.lock().unwrap();
-                        loop {
-                            if let Some(it) = s.pop() {
-                                break Some(it);
+                        let mut got = deques[t].lock().unwrap().pop_back();
+                        if got.is_none() {
+                            for off in 1..nthreads {
+                                let v = (t + off) % nthreads;
+                                if let Some(x) = deques[v].lock().unwrap().pop_front() {
+                                    got = Some(x);
+                                    break;
+                                }
                             }
-                            if active.load(Ordering::SeqCst) == 0 {
-                                break None;
-                            }
-                            s = cv.wait(s).unwrap();
                         }
+                        got
                     };
-                    let Some((dir, pid, depth)) = item else { break };
+                    let Some((dir, pid, depth)) = item else {
+                        if active.load(Ordering::SeqCst) == 0 {
+                            break;
+                        }
+                        std::thread::yield_now();
+                        continue;
+                    };
                     let mut childdirs: Vec<(PathBuf, usize, u32)> = Vec::new();
                     if depth < cfg.max_depth && counter.load(Ordering::Relaxed) < HARD_CAP {
                         if let Ok(rd) = std::fs::read_dir(&dir) {
@@ -212,14 +228,15 @@ fn parallel_scan(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
                             }
                         }
                     }
-                    let mut s = stack.lock().unwrap();
                     let n = childdirs.len();
-                    for c in childdirs {
-                        s.push(c);
+                    {
+                        let mut d = deques[t].lock().unwrap();
+                        for c in childdirs {
+                            d.push_back(c); // children land on MY frontier (worked DFS, or stolen)
+                        }
                     }
                     active.fetch_add(n, Ordering::SeqCst); // children queued
-                    active.fetch_sub(1, Ordering::SeqCst); // this dir done
-                    cv.notify_all();
+                    active.fetch_sub(1, Ordering::SeqCst); // this dir done — no notify; idle workers steal/spin
                 }
                 *recs[t].lock().unwrap() = local;
             });
@@ -395,42 +412,38 @@ fn json_escape(s: &str, out: &mut String) {
     }
 }
 
-/// Emit the pruned nested tree as JSON: {"n":name,"v":bytes,"d":1|0,"c":[...]}.
+/// Emit the pruned nested tree as JSON: {"n":name,"v":bytes,"d":1|0,"c":[...]}, folded into the
+/// `hash::Acc` byte accumulator (the B/U append merge) — no `format!`, no per-node escape String.
 /// Per directory keep the `top` largest children; bucket the remainder into one "… (k more)"
 /// leaf so totals stay exact and the tree stays explorable-but-bounded.
-fn emit_json(i: usize, children: &[Vec<usize>], nodes: &[Node], cfg: &Cfg, out: &mut String) {
-    out.push_str("{\"n\":\"");
-    json_escape(&nodes[i].name, out);
-    out.push_str(&format!("\",\"v\":{},\"d\":{}", nodes[i].sub, if nodes[i].is_dir { 1 } else { 0 }));
+fn emit_json(i: usize, children: &[Vec<usize>], nodes: &[Node], cfg: &Cfg, acc: &mut hash::Acc) {
+    acc.bytes(b"{\"n\":\"").esc_json(&nodes[i].name)
+        .bytes(b"\",\"v\":").u64(nodes[i].sub)
+        .bytes(b",\"d\":").byte(if nodes[i].is_dir { b'1' } else { b'0' });
     let kids = &children[i];
     if !kids.is_empty() {
         let mut ks: Vec<usize> = kids.clone();
         ks.sort_by(|&a, &b| nodes[b].sub.cmp(&nodes[a].sub));
-        out.push_str(",\"c\":[");
+        acc.bytes(b",\"c\":[");
         let keep = ks.len().min(cfg.top);
-        let mut first = true;
-        for &c in ks.iter().take(keep) {
-            if !first {
-                out.push(',');
-            }
-            first = false;
-            emit_json(c, children, nodes, cfg, out);
-        }
+        ks.iter().take(keep).enumerate().for_each(|(j, &c)| {
+            if j > 0 { acc.byte(b','); }
+            emit_json(c, children, nodes, cfg, acc);
+        });
         if ks.len() > keep {
             let rest: u64 = ks.iter().skip(keep).map(|&c| nodes[c].sub).sum();
             let n = ks.len() - keep;
-            if !first {
-                out.push(',');
-            }
-            out.push_str(&format!("{{\"n\":\"… ({n} more)\",\"v\":{rest},\"d\":0}}"));
+            if keep > 0 { acc.byte(b','); }
+            acc.str("{\"n\":\"… (").u64(n as u64).str(" more)\",\"v\":").u64(rest).str(",\"d\":0}");
         }
-        out.push(']');
+        acc.byte(b']');
     }
-    out.push('}');
+    acc.byte(b'}');
 }
 
-/// per-extension size + count over the whole scan (QDirStat's File Type Statistics), as a JSON array.
-fn type_stats_json(nodes: &[Node]) -> String {
+/// per-extension size + count over the whole scan (QDirStat's File Type Statistics), folded into the
+/// accumulator as a JSON array.
+fn type_stats_into(nodes: &[Node], acc: &mut hash::Acc) {
     let mut types: HashMap<&str, (u64, u64)> = HashMap::new();
     for nd in nodes {
         if nd.is_dir || nd.is_link {
@@ -447,17 +460,12 @@ fn type_stats_json(nodes: &[Node]) -> String {
     }
     let mut tv: Vec<(&str, (u64, u64))> = types.into_iter().collect();
     tv.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
-    let mut out = String::from("[");
-    for (i, (ext, (sz, cnt))) in tv.iter().take(60).enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push_str("{\"e\":\"");
-        json_escape(ext, &mut out);
-        out.push_str(&format!("\",\"v\":{sz},\"c\":{cnt}}}"));
-    }
-    out.push(']');
-    out
+    acc.byte(b'[');
+    tv.iter().take(60).enumerate().for_each(|(i, (ext, (sz, cnt)))| {
+        if i > 0 { acc.byte(b','); }
+        acc.bytes(b"{\"e\":\"").esc_json(ext).bytes(b"\",\"v\":").u64(*sz).bytes(b",\"c\":").u64(*cnt).byte(b'}');
+    });
+    acc.byte(b']');
 }
 
 /// Dispatch to the chosen scan backend (std fstatat vs io_uring batched statx), same `Vec<Node>`.
@@ -485,10 +493,13 @@ fn finish(mut nodes: Vec<Node>, scan_ms: f64, cfg: &Cfg) -> (String, u64, usize)
         let p = nodes[i].parent;
         children[p].push(i);
     }
-    let mut json = String::with_capacity(1 << 20);
-    emit_json(0, &children, &nodes, cfg, &mut json);
-    let types = type_stats_json(&nodes);
-    (format!("{{\"scan_ms\":{scan_ms:.0},\"entries\":{n},\"tree\":{json},\"types\":{types}}}"), total, n)
+    let mut acc = hash::Acc::with_capacity(n.saturating_mul(64).max(1 << 16));
+    acc.str("{\"scan_ms\":").u64(scan_ms.round() as u64).str(",\"entries\":").u64(n as u64).str(",\"tree\":");
+    emit_json(0, &children, &nodes, cfg, &mut acc);
+    acc.str(",\"types\":");
+    type_stats_into(&nodes, &mut acc);
+    acc.byte(b'}');
+    (acc.into_string(), total, n)
 }
 
 /// Scan a local path → (response JSON, total bytes, entries). Shared by /scan and report-save.
@@ -1080,99 +1091,137 @@ fn main() {
         };
     }
 
+    // Per-phase wall-clock, always on: each pipeline seam (scan → fold → children → emit → write)
+    // is timed separately so the dominant phase is visible in one run, no profiler needed.
+    let ms = |t: std::time::Instant| t.elapsed().as_secs_f64() * 1e3;
+
     // ── 1. scan → arena (parallel Web walk) ──
-    let t0 = std::time::Instant::now();
+    let t_scan = std::time::Instant::now();
     let canon = std::fs::canonicalize(&root).unwrap_or_else(|_| Path::new(&root).to_path_buf());
     let mut nodes = scan_backend(Path::new(&root), canon.to_string_lossy().into_owned(), &cfg);
+    let scan_ms = ms(t_scan);
 
     // ── 2. the size fold (B/U accumulator), one reverse pass (parent_idx < child_idx) ──
+    let t_fold = std::time::Instant::now();
     for i in (1..nodes.len()).rev() {
         let s = nodes[i].sub;
         let p = nodes[i].parent;
         nodes[p].sub += s;
     }
     let total = nodes[0].sub;
-    let scan_ms = t0.elapsed().as_secs_f64() * 1e3;
-    eprintln!("scanned {} entries · {} · {:.0} ms", nodes.len(), human(total), scan_ms);
+    let fold_ms = ms(t_fold);
+    eprintln!("scanned {} entries · {} · scan {scan_ms:.0} ms · fold {fold_ms:.0} ms", nodes.len(), human(total));
 
     // scan + fold only (the fair comparison vs total-only tools like diskus/du -s) — no serialize
     if mode == "total" {
+        eprintln!("phases: scan {scan_ms:.1} · fold {fold_ms:.1} ms");
         println!("{total}\t{}", human(total));
         return;
     }
 
     // children lists
+    let t_children = std::time::Instant::now();
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
     for i in 1..nodes.len() {
         let p = nodes[i].parent;
         children[p].push(i);
     }
+    let children_ms = ms(t_children);
 
     // ── 3. emit (fromTerm at the chosen α) ──
     if mode == "cache" {
+        let t_emit = std::time::Instant::now(); // emit_cache serializes and writes the file in one pass
         emit_cache(&out, &children, &nodes);
         eprintln!("wrote {out} (QDirStat cache format)");
+        eprintln!("phases: scan {scan_ms:.1} · fold {fold_ms:.1} · children {children_ms:.1} · emit+write {:.1} ms", ms(t_emit));
         return;
     }
-    let mut json = String::with_capacity(1 << 20);
-    emit_json(0, &children, &nodes, &cfg, &mut json);
+    let t_emit = std::time::Instant::now();
+    let mut acc = hash::Acc::with_capacity(nodes.len().saturating_mul(64).max(1 << 20));
+    emit_json(0, &children, &nodes, &cfg, &mut acc);
+    let emit_ms = ms(t_emit);
     if mode == "json" {
-        std::fs::write(&out, &json).expect("write json");
-        eprintln!("wrote {out} ({} KB)", json.len() / 1024);
+        let t_write = std::time::Instant::now();
+        std::fs::write(&out, acc.as_slice()).expect("write json");
+        eprintln!("wrote {out} ({} KB)", acc.len() / 1024);
+        eprintln!("phases: scan {scan_ms:.1} · fold {fold_ms:.1} · children {children_ms:.1} · emit {emit_ms:.1} · write {:.1} ms", ms(t_write));
         return;
     }
-    // html: inject the data into the self-contained viewer template
-    let html = include_str!("viewer.html")
-        .replace("/*__DATA__*/", &json)
+    // html: split the viewer template at the data marker and stream prefix + data + suffix straight
+    // to the file — no whole-document `.replace` (was a second 168 MB copy). The small SCANMS/
+    // NENTRIES substitutions happen on the ~28 KB template only, so a stray "__SCANMS__" inside a
+    // filename can no longer be rewritten.
+    let t_write = std::time::Instant::now();
+    let tmpl = include_str!("viewer.html")
         .replace("__SCANMS__", &format!("{scan_ms:.0}"))
         .replace("__NENTRIES__", &nodes.len().to_string());
-    std::fs::write(&out, &html).expect("write html");
-    eprintln!("wrote {out} ({} KB) — open it in a browser", html.len() / 1024);
+    let (pre, post) = tmpl.split_once("/*__DATA__*/").expect("viewer.html data marker");
+    let mut f = std::io::BufWriter::new(std::fs::File::create(&out).expect("create html"));
+    f.write_all(pre.as_bytes()).expect("write html");
+    f.write_all(acc.as_slice()).expect("write html");
+    f.write_all(post.as_bytes()).expect("write html");
+    f.flush().expect("flush html");
+    let kb = (pre.len() + acc.len() + post.len()) / 1024;
+    eprintln!("wrote {out} ({kb} KB) — open it in a browser");
+    eprintln!("phases: scan {scan_ms:.1} · fold {fold_ms:.1} · children {children_ms:.1} · emit {emit_ms:.1} · inject+write {:.1} ms", ms(t_write));
 }
 
 /// QDirStat cache format V2.0 emit — full fidelity (size = st_size, uid, gid, octal perm, hex mtime,
 /// plus the optional `blocks:` for sparse files and `links:` for hardlinks). Dirs get an absolute
 /// path; their files follow as base names (pre-order grouping, the relative-name space saver). Type
 /// is D / L (symlink) / F (everything else).
+///
+/// This is the emit face routed through the primitive core (`hash::Acc`): one fold over the
+/// directory web into one byte accumulator (the B/U append merge), then one `write_all` — the
+/// single cut to the metal. No per-node `format!`/`writeln!` (the old zoo, the 1.1 s hot spot);
+/// integers go in via the radix unfold, the tree walk is the catamorphism `cache_dir`.
 fn emit_cache(out: &str, children: &[Vec<usize>], nodes: &[Node]) {
-    let mut f = std::io::BufWriter::new(std::fs::File::create(out).expect("create"));
-    writeln!(f, "[qdirstat 2.0 cache file]").unwrap();
-    writeln!(f, "# Generated by sdirstat").unwrap();
-    writeln!(f, "# Do not edit!").unwrap();
-    writeln!(f, "#").unwrap();
-    fn esc(s: &str) -> String {
-        s.bytes()
-            .flat_map(|b| if b <= 0x20 || b == b'%' { format!("%{b:02X}").into_bytes() } else { vec![b] })
-            .map(|b| b as char)
-            .collect()
+    // Cache files run to hundreds of MB on a real tree; size the accumulator generously up front
+    // so the fold never re-allocates (one buffer, the append monoid).
+    let mut acc = hash::Acc::with_capacity(nodes.len().saturating_mul(96).max(1 << 16));
+    acc.str("[qdirstat 2.0 cache file]\n# Generated by sdirstat\n# Do not edit!\n#\n");
+    cache_dir(&mut acc, 0, &nodes[0].name.clone(), children, nodes);
+    std::fs::write(out, acc.as_slice()).expect("write cache");
+}
+
+/// The mandatory V2.0 tail after type+path: size, uid, gid, perm, mtime (+ optional blocks/links),
+/// folded straight into the accumulator (was `format!("\t{}\t{}\t{}\t0{:o}\t0x{:x}", …)`).
+fn cache_tail(acc: &mut hash::Acc, n: &Node) {
+    acc.byte(b'\t').u64(n.size)
+        .byte(b'\t').u64(n.uid as u64)
+        .byte(b'\t').u64(n.gid as u64)
+        .bytes(b"\t0").oct((n.mode & 0o7777) as u64) // the leading '0' the old `0{:o}` printed
+        .bytes(b"\t0x").hex(n.mtime as u64);
+    if !n.is_dir && n.blocks > 0 && n.blocks * 512 < n.size {
+        acc.bytes(b"\tblocks: ").u64(n.blocks); // sparse file
     }
-    // the mandatory V2.0 tail after type+path: size, uid, gid, perm, mtime (+ optional blocks/links).
-    fn tail(n: &Node) -> String {
-        let perm = n.mode & 0o7777;
-        let mut s = format!("\t{}\t{}\t{}\t0{:o}\t0x{:x}", n.size, n.uid, n.gid, perm, n.mtime);
-        if !n.is_dir && n.blocks > 0 && n.blocks * 512 < n.size {
-            s += &format!("\tblocks: {}", n.blocks); // sparse file
-        }
-        if !n.is_dir && n.nlink > 1 {
-            s += &format!("\tlinks: {}", n.nlink); // hardlinked
-        }
-        s
+    if !n.is_dir && n.nlink > 1 {
+        acc.bytes(b"\tlinks: ").u64(n.nlink); // hardlinked
     }
-    fn ty(n: &Node) -> &'static str {
-        if n.is_dir { "D" } else if n.is_link { "L" } else { "F" }
-    }
-    fn rec(i: usize, path: &str, children: &[Vec<usize>], nodes: &[Node], f: &mut impl Write) {
-        writeln!(f, "D {}{}", esc(path), tail(&nodes[i])).unwrap();
-        for &c in &children[i] {
-            if !nodes[c].is_dir {
-                writeln!(f, "{} {}{}", ty(&nodes[c]), esc(&nodes[c].name), tail(&nodes[c])).unwrap();
-            }
-        }
-        for &c in &children[i] {
-            if nodes[c].is_dir {
-                rec(c, &format!("{}/{}", path.trim_end_matches('/'), nodes[c].name), children, nodes, f);
-            }
-        }
-    }
-    rec(0, &nodes[0].name.clone(), children, nodes, &mut f);
+}
+
+/// The catamorphism over the directory web — the eliminator, the algebra is the only freedom
+/// (`Song/Algebra.lean` `fromTerm`). Each step couples only this node to its direct children (the
+/// two `for_each` folds: leaves, then dirs); the tree's height is *reach* (flat), not coupling
+/// depth — so this respects the depth-2 rule (`TrinityDepth`: one coupling = depth 2). Pre-order:
+/// the dir line, then its non-dir children as base names, then recurse into child dirs.
+fn cache_dir(acc: &mut hash::Acc, i: usize, path: &str, children: &[Vec<usize>], nodes: &[Node]) {
+    acc.bytes(b"D ").esc(path);
+    cache_tail(acc, &nodes[i]);
+    acc.byte(b'\n');
+    children[i].iter().filter(|&&c| !nodes[c].is_dir).for_each(|&c| {
+        let n = &nodes[c];
+        acc.byte(if n.is_link { b'L' } else { b'F' }).byte(b' ').esc(&n.name);
+        cache_tail(acc, n);
+        acc.byte(b'\n');
+    });
+    children[i].iter().filter(|&&c| nodes[c].is_dir).for_each(|&c| {
+        // child absolute path = parent + '/' + name (the append monoid on the String carrier; was
+        // `format!("{}/{}", …)`). Per-dir, not per-entry, so off the hot path.
+        let mut sub = String::with_capacity(path.len() + 1 + nodes[c].name.len());
+        sub.push_str(path.trim_end_matches('/'));
+        sub.push('/');
+        sub.push_str(&nodes[c].name);
+        cache_dir(acc, c, &sub, children, nodes);
+    });
 }
