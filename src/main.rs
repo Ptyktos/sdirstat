@@ -471,28 +471,337 @@ fn scan_backend(root: &Path, root_name: String, cfg: &Cfg) -> Vec<Node> {
     parallel_scan(root, root_name, cfg)
 }
 
-/// Scan a path and return (tree JSON, type-stats JSON, entry count, scan ms). Shared by serve.
-fn scan_to_json(root: &str, cfg: &Cfg) -> (String, String, usize, f64) {
-    let t0 = std::time::Instant::now();
-    let canon = std::fs::canonicalize(root).unwrap_or_else(|_| Path::new(root).to_path_buf());
-    let nodes = scan_backend(Path::new(root), canon.to_string_lossy().into_owned(), cfg);
-    // fold + children
-    let mut nodes = nodes;
+/// Fold a scanned arena → the /scan response body `{scan_ms, entries, tree, types}`, plus (total, n).
+fn finish(mut nodes: Vec<Node>, scan_ms: f64, cfg: &Cfg) -> (String, u64, usize) {
     for i in (1..nodes.len()).rev() {
         let s = nodes[i].sub;
         let p = nodes[i].parent;
         nodes[p].sub += s;
     }
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
-    for i in 1..nodes.len() {
+    let total = nodes.first().map(|n| n.sub).unwrap_or(0);
+    let n = nodes.len();
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 1..n {
         let p = nodes[i].parent;
         children[p].push(i);
     }
-    let scan_ms = t0.elapsed().as_secs_f64() * 1e3;
     let mut json = String::with_capacity(1 << 20);
     emit_json(0, &children, &nodes, cfg, &mut json);
     let types = type_stats_json(&nodes);
-    (json, types, nodes.len(), scan_ms)
+    (format!("{{\"scan_ms\":{scan_ms:.0},\"entries\":{n},\"tree\":{json},\"types\":{types}}}"), total, n)
+}
+
+/// Scan a local path → (response JSON, total bytes, entries). Shared by /scan and report-save.
+fn scan_response(root: &str, cfg: &Cfg) -> (String, u64, usize) {
+    let t0 = std::time::Instant::now();
+    let canon = std::fs::canonicalize(root).unwrap_or_else(|_| Path::new(root).to_path_buf());
+    let nodes = scan_backend(Path::new(root), canon.to_string_lossy().into_owned(), cfg);
+    finish(nodes, t0.elapsed().as_secs_f64() * 1e3, cfg)
+}
+
+/// One query parameter from `…?a=1&b=2`, URL-decoded.
+fn qparam(target: &str, key: &str) -> Option<String> {
+    let q = target.splitn(2, '?').nth(1)?;
+    q.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        if k == key { Some(url_decode(v)) } else { None }
+    })
+}
+
+// ── sources: mounts (local + network) + rclone remotes (S3/WebDAV/SMB/SFTP/…) ──
+
+fn push_src(out: &mut String, first: &mut bool, path: &str, fstype: &str, kind: &str, label: &str) {
+    if !*first { out.push(','); }
+    *first = false;
+    out.push_str("{\"path\":\"");
+    json_escape(path, out);
+    out.push_str("\",\"fstype\":\"");
+    json_escape(fstype, out);
+    out.push_str("\",\"kind\":\"");
+    out.push_str(kind);
+    out.push_str("\",\"label\":\"");
+    json_escape(label, out);
+    out.push_str("\"}");
+}
+
+/// Scannable sources: quick locations, PVE/Docker storage, and real mounts (local + network).
+fn mounts_json() -> String {
+    let mut out = String::from("[");
+    let mut first = true;
+    if let Ok(home) = std::env::var("HOME") {
+        push_src(&mut out, &mut first, &home, "", "home", "Home");
+    }
+    push_src(&mut out, &mut first, "/", "", "local", "Root /");
+    for (p, l) in [("/var/lib/docker", "Docker storage"), ("/var/lib/vz", "Proxmox VE storage"), ("/mnt/pve", "Proxmox VE mounts")] {
+        if Path::new(p).is_dir() {
+            push_src(&mut out, &mut first, p, "", "backup", l);
+        }
+    }
+    if let Ok(m) = std::fs::read_to_string("/proc/mounts") {
+        for line in m.lines() {
+            let f: Vec<&str> = line.split(' ').collect();
+            if f.len() < 3 {
+                continue;
+            }
+            let (mp, fstype) = (f[1], f[2]);
+            let kind = match fstype {
+                "cifs" | "smb3" | "smbfs" | "nfs" | "nfs4" => "network",
+                t if t.starts_with("fuse.") => {
+                    if mp.contains("gvfs") { "network" } else { "local" }
+                }
+                "ext4" | "xfs" | "btrfs" | "vfat" | "exfat" | "ntfs" | "zfs" | "f2fs" => "local",
+                _ => continue,
+            };
+            let mp = mp.replace("\\040", " ");
+            push_src(&mut out, &mut first, &mp, fstype, kind, &mp);
+        }
+    }
+    out.push(']');
+    out
+}
+
+/// `rclone listremotes` → JSON array of configured remote names (e.g. `"s3:"`, `"nas:"`).
+fn remotes_json() -> String {
+    let mut arr = String::from("[");
+    if let Ok(o) = Command::new("rclone").arg("listremotes").output() {
+        if o.status.success() {
+            let mut first = true;
+            for r in String::from_utf8_lossy(&o.stdout).lines().map(str::trim).filter(|l| !l.is_empty()) {
+                if !first { arr.push(','); }
+                first = false;
+                arr.push('"');
+                json_escape(r, &mut arr);
+                arr.push('"');
+            }
+        }
+    }
+    arr.push(']');
+    arr
+}
+
+/// Build a Node arena from a flat (size, "a/b/file") listing — rclone output / a cache import.
+fn build_tree_from_flat(root_name: &str, lines: impl Iterator<Item = (u64, String)>) -> Vec<Node> {
+    let mut root = Node::empty();
+    root.name = root_name.to_string();
+    root.is_dir = true;
+    let mut nodes = vec![root];
+    let mut dirmap: HashMap<String, usize> = HashMap::new();
+    for (size, path) in lines {
+        let comps: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        if comps.is_empty() {
+            continue;
+        }
+        let mut parent = 0usize;
+        let mut acc = String::new();
+        for (i, comp) in comps.iter().enumerate() {
+            if !acc.is_empty() { acc.push('/'); }
+            acc.push_str(comp);
+            if i + 1 == comps.len() {
+                let mut nd = Node::empty();
+                nd.parent = parent;
+                nd.name = (*comp).to_string();
+                nd.own = size; nd.sub = size; nd.size = size; nd.blocks = (size + 511) / 512;
+                nodes.push(nd);
+            } else if let Some(&id) = dirmap.get(&acc) {
+                parent = id;
+            } else {
+                let id = nodes.len();
+                let mut nd = Node::empty();
+                nd.parent = parent;
+                nd.name = (*comp).to_string();
+                nd.is_dir = true;
+                nodes.push(nd);
+                dirmap.insert(acc.clone(), id);
+                parent = id;
+            }
+        }
+    }
+    nodes
+}
+
+/// Scan an rclone remote (S3/WebDAV/SMB/SFTP/…) via `rclone lsf` → the same response shape.
+fn rclone_response(remote: &str, cfg: &Cfg) -> Result<(String, u64, usize), String> {
+    let t0 = std::time::Instant::now();
+    let out = Command::new("rclone")
+        .args(["lsf", "-R", "--files-only", "--format", "sp", "--separator", "\t", remote])
+        .output()
+        .map_err(|e| format!("rclone: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let lines = text.lines().filter_map(|l| {
+        let (s, p) = l.split_once('\t')?;
+        Some((s.trim().parse::<u64>().ok()?, p.to_string()))
+    });
+    Ok(finish(build_tree_from_flat(remote, lines), t0.elapsed().as_secs_f64() * 1e3, cfg))
+}
+
+// ── reports: persisted scans (save · list · open · import) ──
+
+fn reports_dir() -> PathBuf {
+    let base = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let d = base.join("sdirstat/reports");
+    let _ = std::fs::create_dir_all(&d);
+    d
+}
+
+fn list_reports() -> String {
+    let mut out = String::from("[");
+    if let Ok(s) = std::fs::read_to_string(reports_dir().join("index.ndjson")) {
+        let mut first = true;
+        for line in s.lines().filter(|l| !l.trim().is_empty()) {
+            if !first { out.push(','); }
+            first = false;
+            out.push_str(line);
+        }
+    }
+    out.push(']');
+    out
+}
+
+fn get_report(id: &str) -> Option<String> {
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return None;
+    }
+    std::fs::read_to_string(reports_dir().join(format!("{id}.json"))).ok()
+}
+
+/// Persist a scan response as a report; returns the meta JSON line.
+fn save_report(label: &str, src: &str, source: &str, response: &str, total: u64, entries: usize) -> String {
+    let dir = reports_dir();
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let id = format!("r{ms}");
+    let mut meta = format!("{{\"id\":\"{id}\",\"path\":\"");
+    json_escape(src, &mut meta);
+    meta.push_str("\",\"label\":\"");
+    json_escape(if label.is_empty() { src } else { label }, &mut meta);
+    meta.push_str(&format!("\",\"time\":{},\"total\":{total},\"entries\":{entries},\"source\":\"{source}\"}}", ms / 1000));
+    let file = format!("{{\"meta\":{meta},\"data\":{response}}}");
+    let _ = std::fs::write(dir.join(format!("{id}.json")), file);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("index.ndjson")) {
+        let _ = writeln!(f, "{meta}");
+    }
+    meta
+}
+
+fn url_unescape(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let h = |c: u8| (c as char).to_digit(16).unwrap_or(0) as u8;
+            out.push(h(b[i + 1]) * 16 + h(b[i + 2]));
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn cache_size(s: &str) -> u64 {
+    let s = s.trim();
+    let (num, mult): (&str, u64) = match s.as_bytes().last() {
+        Some(b'K') => (&s[..s.len() - 1], 1024),
+        Some(b'M') => (&s[..s.len() - 1], 1024 * 1024),
+        Some(b'G') => (&s[..s.len() - 1], 1024 * 1024 * 1024),
+        _ => (s, 1),
+    };
+    num.parse::<u64>().unwrap_or(0) * mult
+}
+
+fn ensure_cache_dir(abspath: &str, nodes: &mut Vec<Node>, dirmap: &mut HashMap<String, usize>) -> usize {
+    if let Some(&id) = dirmap.get(abspath) {
+        return id;
+    }
+    let mut parent = 0usize;
+    let mut acc = String::new();
+    for comp in abspath.split('/').filter(|s| !s.is_empty()) {
+        acc.push('/');
+        acc.push_str(comp);
+        if let Some(&id) = dirmap.get(&acc) {
+            parent = id;
+        } else {
+            let id = nodes.len();
+            let mut nd = Node::empty();
+            nd.parent = parent;
+            nd.name = comp.to_string();
+            nd.is_dir = true;
+            nodes.push(nd);
+            dirmap.insert(acc.clone(), id);
+            parent = id;
+        }
+    }
+    parent
+}
+
+/// Parse a QDirStat cache file (v1/v2) into a Node arena — the interop import path.
+fn parse_qdirstat_cache(text: &str) -> Vec<Node> {
+    let mut root = Node::empty();
+    root.is_dir = true;
+    root.name = "/".to_string();
+    let mut nodes = vec![root];
+    let mut dirmap: HashMap<String, usize> = HashMap::new();
+    let mut cur = 0usize;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+            continue;
+        }
+        let mut it = line.split_whitespace();
+        let ty = match it.next() { Some(t) => t, None => continue };
+        let raw = match it.next() { Some(p) => p, None => continue };
+        let size = it.next().map(cache_size).unwrap_or(0);
+        if ty.eq_ignore_ascii_case("D") {
+            cur = ensure_cache_dir(&url_unescape(raw), &mut nodes, &mut dirmap);
+            nodes[cur].own = size;
+            nodes[cur].sub = size;
+        } else {
+            let name = url_unescape(raw);
+            let (parent, leaf) = if name.starts_with('/') {
+                let p = Path::new(&name);
+                let dir = p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+                let leaf = p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| name.clone());
+                (ensure_cache_dir(&dir, &mut nodes, &mut dirmap), leaf)
+            } else {
+                (cur, name)
+            };
+            let mut nd = Node::empty();
+            nd.parent = parent;
+            nd.name = leaf;
+            nd.own = size; nd.sub = size; nd.size = size;
+            nd.is_link = ty.eq_ignore_ascii_case("L");
+            nodes.push(nd);
+        }
+    }
+    nodes
+}
+
+/// Import a server-side file as a report: a QDirStat cache, or a sdirstat `--json` tree.
+fn import_file(file: &str, label: &str) -> Result<String, String> {
+    let content = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
+    let t = content.trim_start();
+    let cfg = Cfg { max_depth: 1 << 20, top: 1 << 20, threads: 1, apparent: false, no_stat: false, iouring: false };
+    if t.starts_with("[qdirstat") {
+        let (resp, total, n) = finish(parse_qdirstat_cache(&content), 0.0, &cfg);
+        Ok(save_report(label, file, "cache", &resp, total, n))
+    } else if t.starts_with('{') {
+        // a sdirstat --json tree: {"n":…,"v":N,…}. Wrap as a scan response, lift the root total.
+        let total = t.split("\"v\":").nth(1)
+            .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).find(|x| !x.is_empty()))
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(0);
+        let resp = format!("{{\"scan_ms\":0,\"entries\":0,\"tree\":{},\"types\":[]}}", t);
+        Ok(save_report(label, file, "json", &resp, total, 0))
+    } else {
+        Err("unrecognized file (expected a QDirStat cache or a sdirstat JSON tree)".into())
+    }
 }
 
 fn url_decode(s: &str) -> String {
@@ -630,21 +939,65 @@ fn handle_conn(mut stream: TcpStream, base: Cfg) {
         return;
     }
     if target.starts_with("/scan") {
-        let q = target.splitn(2, '?').nth(1).unwrap_or("");
-        let mut path = std::env::var("HOME").unwrap_or_else(|_| "/".into());
         let mut cfg = base;
-        for kv in q.split('&') {
-            let mut it = kv.splitn(2, '=');
-            match (it.next(), it.next()) {
-                (Some("path"), Some(v)) => path = url_decode(v),
-                (Some("top"), Some(v)) => cfg.top = v.parse().unwrap_or(cfg.top),
-                (Some("depth"), Some(v)) => cfg.max_depth = v.parse().unwrap_or(cfg.max_depth),
-                _ => {}
-            }
-        }
-        let (json, types, n, ms) = scan_to_json(&path, &cfg);
-        let body = format!("{{\"scan_ms\":{ms:.0},\"entries\":{n},\"tree\":{json},\"types\":{types}}}");
+        let path = qparam(target, "path").unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+        if let Some(t) = qparam(target, "top").and_then(|v| v.parse().ok()) { cfg.top = t; }
+        if let Some(d) = qparam(target, "depth").and_then(|v| v.parse().ok()) { cfg.max_depth = d; }
+        let (body, _, _) = scan_response(&path, &cfg);
         http_write(&mut stream, "200 OK", "application/json", body.as_bytes());
+        return;
+    }
+    // ── sources ──
+    if target.starts_with("/mounts") {
+        http_write(&mut stream, "200 OK", "application/json", mounts_json().as_bytes());
+        return;
+    }
+    if target.starts_with("/remotes") {
+        http_write(&mut stream, "200 OK", "application/json", remotes_json().as_bytes());
+        return;
+    }
+    if target.starts_with("/remote/scan") {
+        let body = match rclone_response(&qparam(target, "remote").unwrap_or_default(), &base) {
+            Ok((b, _, _)) => b,
+            Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+        };
+        http_write(&mut stream, "200 OK", "application/json", body.as_bytes());
+        return;
+    }
+    // ── reports ──
+    if target.starts_with("/report/get") {
+        match get_report(&qparam(target, "id").unwrap_or_default()) {
+            Some(j) => http_write(&mut stream, "200 OK", "application/json", j.as_bytes()),
+            None => http_write(&mut stream, "404 Not Found", "application/json", br#"{"error":"not found"}"#),
+        }
+        return;
+    }
+    if target.starts_with("/report/save") {
+        let label = qparam(target, "label").unwrap_or_default();
+        let saved = if let Some(r) = qparam(target, "remote") {
+            rclone_response(&r, &base).ok().map(|(b, t, n)| save_report(&label, &r, "rclone", &b, t, n))
+        } else {
+            let p = qparam(target, "path").unwrap_or_default();
+            let (b, t, n) = scan_response(&p, &base);
+            Some(save_report(&label, &p, "fs", &b, t, n))
+        };
+        let body = match saved {
+            Some(meta) => format!("{{\"ok\":true,\"meta\":{meta}}}"),
+            None => r#"{"ok":false,"err":"scan failed"}"#.into(),
+        };
+        http_write(&mut stream, "200 OK", "application/json", body.as_bytes());
+        return;
+    }
+    if target.starts_with("/report/import") {
+        let body = match import_file(&qparam(target, "file").unwrap_or_default(), &qparam(target, "label").unwrap_or_default()) {
+            Ok(meta) => format!("{{\"ok\":true,\"meta\":{meta}}}"),
+            Err(e) => format!("{{\"ok\":false,\"err\":\"{}\"}}", e.replace('"', "'")),
+        };
+        http_write(&mut stream, "200 OK", "application/json", body.as_bytes());
+        return;
+    }
+    if target.starts_with("/reports") {
+        http_write(&mut stream, "200 OK", "application/json", list_reports().as_bytes());
         return;
     }
     http_write(&mut stream, "404 Not Found", "text/plain", b"not found");

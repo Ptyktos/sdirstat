@@ -59,6 +59,22 @@
   .mpath{padding:5px 10px 7px;color:#6f7a8d;font-size:11px;max-width:280px;overflow:hidden;text-overflow:ellipsis;border-bottom:1px solid #283248;margin-bottom:3px}
   .msep{height:1px;background:#283248;margin:4px 2px}
   #toast{position:fixed;bottom:36px;left:50%;transform:translateX(-50%);background:#1a2740;border:1px solid #34507c;color:#cfe0ff;padding:7px 14px;border-radius:8px;display:none;z-index:30}
+  #scrim{position:fixed;inset:0;z-index:49;background:#0006;display:none}#scrim.open{display:block}
+  #drawer{position:fixed;top:0;left:0;bottom:0;width:310px;z-index:50;background:#0e1118;border-right:1px solid #1b2030;
+    transform:translateX(-100%);transition:transform .15s;overflow:auto;box-shadow:6px 0 28px #0009}
+  #drawer.open{transform:none}
+  #drawer .dhead{padding:11px 12px 5px;color:#8893a6;font-weight:600;display:flex;justify-content:space-between;
+    align-items:center;position:sticky;top:0;background:#0e1118;z-index:1}
+  #drawer .dlist{padding:1px 6px 8px}
+  #drawer .kind{color:#5a6478;font-size:10px;letter-spacing:.04em;text-transform:uppercase;padding:7px 8px 2px}
+  #drawer .ditem{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer}
+  #drawer .ditem:hover{background:#1a2233}
+  #drawer .ditem .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #drawer .ditem .meta{color:#6f7a8d;font-size:11px;white-space:nowrap;flex:none}
+  #drawer button{font:inherit;background:#1a2233;border:1px solid #2c3852;color:#cdd6e6;border-radius:6px;padding:3px 9px;cursor:pointer}
+  #drawer button:hover{background:#243049}
+  #drawer .dimport{display:flex;gap:5px;padding:2px 8px 8px}
+  #drawer .dimport input{flex:1;min-width:0;background:#11151e;border:1px solid #2a3346;color:#dfe5ef;border-radius:5px;padding:4px 7px;font:inherit}
   #modal{position:fixed;inset:0;z-index:40;display:none;align-items:center;justify-content:center;background:#0009}
   #modbox{background:#11151e;border:1px solid #2c3550;border-radius:10px;padding:18px 20px;max-width:460px;box-shadow:0 12px 40px #000c}
   #modbox h3{margin:0 0 8px;font-size:14px;color:#fff}
@@ -72,6 +88,7 @@
 <body>
 <div id="app">
   <div id="bar">
+    <div class="btn" id="srcbtn" title="Sources &amp; Reports">☰</div>
     <input id="path" placeholder="/path/to/scan">
     <div class="btn" id="scan">Scan</div>
     <div id="crumbs"></div>
@@ -96,6 +113,17 @@
     </div>
   </div>
   <div id="status"></div>
+</div>
+<div id="scrim"></div>
+<div id="drawer">
+  <div class="dhead">Sources</div>
+  <div id="sources" class="dlist"></div>
+  <div class="dhead">Reports <button id="savebtn" title="Save the current scan">💾 Save</button></div>
+  <div class="dimport">
+    <input id="importpath" placeholder="/path/to/report.json or .qdirstat.cache">
+    <button id="importbtn">Import</button>
+  </div>
+  <div id="reports" class="dlist"></div>
 </div>
 <div id="tip"></div>
 <div id="menu"></div>
@@ -353,20 +381,99 @@ function setView(m){mode=m;
   drawView()}
 $('vmap').onclick=()=>setView('map');$('vsun').onclick=()=>setView('sun');$('vtype').onclick=()=>setView('types');
 
-// ---- scan ----
+// ---- load any scan response into the views (local scan / remote / report) ----
+let curSource='fs';
+function loadScan(j, label, source){
+  TREE=j.tree; TYPES=j.types||[]; augment(TREE,null,0); viewRoot=TREE; selected=null;
+  scanPath=label||TREE.n; curSource=source||'fs'; lastMs=j.scan_ms; lastEnt=j.entries;
+  $('path').value=scanPath; renderAll();
+}
 async function scan(path){
   $('busy').style.display='flex';
-  try{
-    const res=await fetch('/scan?path='+encodeURIComponent(path)+'&top=120');
-    const j=await res.json();
-    TREE=j.tree; TYPES=j.types||[]; augment(TREE,null,0); viewRoot=TREE; selected=null;
-    scanPath=TREE.n; lastMs=j.scan_ms; lastEnt=j.entries; $('path').value=TREE.n;
-    renderAll();
-  }catch(e){alert('scan failed: '+e);}
+  try{ const j=await (await fetch('/scan?path='+encodeURIComponent(path)+'&top=120')).json(); loadScan(j,null,'fs'); }
+  catch(e){alert('scan failed: '+e)}
   $('busy').style.display='none';
 }
 $('scan').onclick=()=>scan($('path').value);
 $('path').addEventListener('keydown',e=>{if(e.key==='Enter')scan($('path').value)});
+
+// ---- Sources & Reports drawer ----
+function openDrawer(){$('drawer').classList.add('open');$('scrim').classList.add('open');loadSources();loadReports()}
+function closeDrawer(){$('drawer').classList.remove('open');$('scrim').classList.remove('open')}
+$('srcbtn').onclick=()=>$('drawer').classList.contains('open')?closeDrawer():openDrawer();
+$('scrim').onclick=closeDrawer;
+
+async function loadSources(){
+  const host=$('sources'); host.innerHTML='<div class=kind>loading…</div>';
+  try{
+    const [mounts,remotes]=await Promise.all([fetch('/mounts').then(r=>r.json()),fetch('/remotes').then(r=>r.json())]);
+    host.innerHTML='';
+    const labels={home:'Quick',backup:'Backups (PVE / Docker)',network:'Network drives',local:'Local disks'};
+    for(const k of ['home','backup','network','local']){
+      const items=mounts.filter(m=>m.kind===k); if(!items.length) continue;
+      const h=document.createElement('div');h.className='kind';h.textContent=labels[k];host.appendChild(h);
+      for(const m of items){
+        const d=document.createElement('div');d.className='ditem';d.title=m.path;
+        d.innerHTML='<span class=nm></span><span class=meta></span>';
+        d.querySelector('.nm').textContent=m.label; d.querySelector('.meta').textContent=m.fstype||'';
+        d.onclick=()=>{closeDrawer();scan(m.path)}; host.appendChild(d);
+      }
+    }
+    if(remotes.length){
+      const h=document.createElement('div');h.className='kind';h.textContent='Remotes — rclone (S3 / WebDAV / SMB / SFTP…)';host.appendChild(h);
+      for(const r of remotes){
+        const d=document.createElement('div');d.className='ditem';
+        d.innerHTML='<span class=nm></span><span class=meta>rclone</span>';
+        d.querySelector('.nm').textContent=r; d.onclick=()=>{closeDrawer();scanRemote(r)}; host.appendChild(d);
+      }
+    }
+    if(!host.children.length) host.innerHTML='<div class=ditem>no sources found</div>';
+  }catch(e){host.innerHTML='<div class=ditem>error: '+e+'</div>'}
+}
+async function scanRemote(remote){
+  $('busy').style.display='flex';
+  try{ const j=await (await fetch('/remote/scan?remote='+encodeURIComponent(remote))).json();
+    if(j.error) alert('remote scan failed: '+j.error); else loadScan(j, remote, 'rclone'); }
+  catch(e){alert('remote scan failed: '+e)}
+  $('busy').style.display='none';
+}
+async function loadReports(){
+  const host=$('reports'); host.innerHTML='<div class=kind>loading…</div>';
+  try{
+    const reps=await fetch('/reports').then(r=>r.json());
+    host.innerHTML = reps.length?'':'<div class=ditem>no saved reports yet</div>';
+    reps.slice().reverse().forEach(r=>{
+      const d=document.createElement('div');d.className='ditem';d.title=r.path;
+      const when=new Date(r.time*1000).toLocaleString();
+      d.innerHTML='<span class=nm></span><span class=meta></span>';
+      d.querySelector('.nm').textContent=r.label; d.querySelector('.meta').textContent=human(r.total)+' · '+when;
+      d.onclick=()=>{closeDrawer();openReport(r.id)}; host.appendChild(d);
+    });
+  }catch(e){host.innerHTML='<div class=ditem>error: '+e+'</div>'}
+}
+async function openReport(id){
+  $('busy').style.display='flex';
+  try{ const j=await (await fetch('/report/get?id='+encodeURIComponent(id))).json();
+    if(j.data) loadScan(j.data, (j.meta&&j.meta.path)||id, (j.meta&&j.meta.source)||'report'); else alert('report not found'); }
+  catch(e){alert('open failed: '+e)}
+  $('busy').style.display='none';
+}
+$('savebtn').onclick=async()=>{
+  if(!scanPath){toast('scan something first');return}
+  $('savebtn').textContent='saving…';
+  try{
+    const q = curSource==='rclone' ? 'remote='+encodeURIComponent(scanPath) : 'path='+encodeURIComponent(scanPath);
+    await fetch('/report/save?'+q+'&label='+encodeURIComponent(scanPath),{method:'POST'});
+    loadReports(); toast('saved report');
+  }catch(e){toast('save failed: '+e)}
+  $('savebtn').textContent='💾 Save';
+};
+$('importbtn').onclick=async()=>{
+  const f=$('importpath').value.trim(); if(!f)return;
+  try{ const j=await (await fetch('/report/import?file='+encodeURIComponent(f),{method:'POST'})).json();
+    if(j.ok){$('importpath').value='';loadReports();toast('imported')} else toast('import failed: '+(j.err||'')); }
+  catch(e){toast('import failed: '+e)}
+};
 
 // ---- resize ----
 function resize(){const r=$('right').getBoundingClientRect();dpr=window.devicePixelRatio||1;CW=r.width;CH=r.height;
