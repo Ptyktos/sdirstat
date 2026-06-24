@@ -48,8 +48,10 @@ sdirstat serve [-p PORT]       live web GUI at http://127.0.0.1:PORT (default 80
 | `-o FILE` | output path (default: `report.html` / `tree.json` / `out.qdirstat.cache`) |
 | `--threads N` | worker threads (default: CPU count; `1` = single-threaded) |
 | `--max-depth N` | maximum recursion depth (default 40) |
+| `--max-entries N` | OOM-guard entry ceiling (default 32M; `0` = unlimited). Hitting it warns and leaves the scan **incomplete** — raise it to scan a whole large `/`. |
 | `--top K` | children kept per directory in the pruned tree/HTML/JSON (default 80) |
 | `--apparent` | count apparent size (`st_size`) instead of allocated blocks |
+| `-x`, `--one-file-system` | stay on the root filesystem (`du -x`): skips `/proc`, `/sys`, `/dev` and other mounts. On btrfs, subvolumes have distinct `st_dev`, so this also stops at subvolume boundaries (e.g. `/home`) — same as `du -x`/`find -xdev`. |
 | `--iouring` | io_uring batched-`statx` backend (Linux x86_64; for cold/SSD scans) |
 | `-p, --port N` | port for `serve` (default 8080) |
 | `-h, --help` | show help |
