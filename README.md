@@ -1,5 +1,7 @@
 # sdirstat — the directory tree as a web
 
+![sdirstat social preview](assets/social-card.png)
+
 Headless filesystem indexer. **Parallel scan → one reverse-pass size fold → any output.** Emits QDirStat cache files, nested JSON, or an interactive report. The zero-dep Rust replacement for Perl `qdirstat-cache-writer`. Also ships a squarified treemap + sunburst web GUI.
 
 ## Quick start
