@@ -1,0 +1,23 @@
+# Native desktop shell for sdirstat. Deliberately NOT a member of the root workspace — it carries
+# the Tauri dependency tree, while the core `sdirstat` crate stays zero-dependency (std-only).
+# It reuses the core unchanged: the bundled `sdirstat` binary is launched as a sidecar
+# (`sdirstat serve`) and a native window is pointed at its loopback GUI.
+[package]
+name = "sdirstat-desktop"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Native desktop GUI for sdirstat — an interactive treemap/sunburst disk-usage explorer"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

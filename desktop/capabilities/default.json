@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Allow the app to launch the bundled sdirstat sidecar that serves the GUI on loopback.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [{ "name": "binaries/sdirstat", "sidecar": true, "args": true }]
+    }
+  ]
+}

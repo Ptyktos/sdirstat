@@ -1,0 +1,5 @@
+# Build output and staged inputs for the Tauri desktop app.
+/target
+/gen
+# The sidecar is a copy of the built core binary — staged by the build, not source.
+/binaries
