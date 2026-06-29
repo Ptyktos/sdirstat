@@ -1,0 +1,64 @@
+# Publish the AUR packages (sdirstat, sdirstat-bin) on a published release. Gated on AUR_SSH_KEY —
+# with the secret absent the job exits early (inert). Runs in an Arch container so makepkg/updpkgsums
+# are available. UNTESTED until the secret is set + the first run validates it (see packaging/aur/README.md).
+name: aur
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "version without the leading v (defaults to the release tag)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Gate on the AUR secret
+        id: gate
+        run: echo "ok=${{ secrets.AUR_SSH_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Tooling + build user
+        if: steps.gate.outputs.ok == 'true'
+        run: |
+          pacman -Syu --noconfirm --needed git openssh pacman-contrib
+          useradd -m builder
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        if: steps.gate.outputs.ok == 'true'
+
+      - name: Mirror PKGBUILDs to the AUR
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          set -eu
+          VER="${GITHUB_REF_NAME#v}"; VER="${VER:-${{ github.event.inputs.version }}}"; VER="${VER:-0.1.1}"
+          install -d -m700 /home/builder/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > /home/builder/.ssh/aur && chmod 600 /home/builder/.ssh/aur
+          ssh-keyscan -H aur.archlinux.org >> /home/builder/.ssh/known_hosts 2>/dev/null
+          printf 'Host aur.archlinux.org\n  User aur\n  IdentityFile /home/builder/.ssh/aur\n' > /home/builder/.ssh/config
+          chown -R builder:builder /home/builder/.ssh "$GITHUB_WORKSPACE"
+          for pkg in sdirstat sdirstat-bin; do
+            runuser -u builder -- bash -euo pipefail -c '
+              pkg="'"$pkg"'"; ver="'"$VER"'"; src="'"$GITHUB_WORKSPACE"'/packaging/aur/$pkg"
+              cd /home/builder
+              git config --global user.name  "sdirstat-bot"
+              git config --global user.email "clay@twn.systems"
+              git clone "ssh://aur@aur.archlinux.org/$pkg.git" "$pkg" 2>/dev/null || { mkdir -p "$pkg"; cd "$pkg"; git init -q; git remote add origin "ssh://aur@aur.archlinux.org/$pkg.git"; cd /home/builder; }
+              cp "$src/PKGBUILD" "$pkg/PKGBUILD"
+              cd "$pkg"
+              sed -i "s/^pkgver=.*/pkgver=$ver/; s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+              updpkgsums
+              makepkg --printsrcinfo > .SRCINFO
+              git add PKGBUILD .SRCINFO
+              git commit -m "$pkg $ver" || echo "no changes for $pkg"
+              git push origin HEAD:master
+            '
+          done

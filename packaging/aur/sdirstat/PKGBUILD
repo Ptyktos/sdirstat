@@ -1,0 +1,37 @@
+# Maintainer: Clay Townsend <clay@twn.systems>
+pkgname=sdirstat
+pkgver=0.1.1
+pkgrel=1
+pkgdesc="Fast parallel disk-usage analyzer with a treemap/sunburst GUI; a zero-dep QDirStat cache writer"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Ptyktos/sdirstat"
+license=('MIT' 'Apache-2.0')
+depends=('gcc-libs' 'glibc')
+optdepends=('glib2: "gio trash" for the Move to Trash action in the GUI'
+            'xdg-utils: Open / Reveal in the GUI'
+            'chromium: standalone app window for `sdirstat gui` (any chromium-based browser works)')
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo build --release --locked
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --release --locked
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/sdirstat     "$pkgdir/usr/bin/sdirstat"
+  install -Dm644 packaging/sdirstat.desktop  "$pkgdir/usr/share/applications/sdirstat.desktop"
+  install -Dm644 packaging/sdirstat.svg      "$pkgdir/usr/share/icons/hicolor/scalable/apps/sdirstat.svg"
+  install -Dm644 README.md                   "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE-MIT                  "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 LICENSE-APACHE               "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+}

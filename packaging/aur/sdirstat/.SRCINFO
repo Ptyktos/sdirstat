@@ -1,0 +1,19 @@
+pkgbase = sdirstat
+	pkgdesc = Fast parallel disk-usage analyzer with a treemap/sunburst GUI; a zero-dep QDirStat cache writer
+	pkgver = 0.1.1
+	pkgrel = 1
+	url = https://github.com/Ptyktos/sdirstat
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	license = Apache-2.0
+	makedepends = cargo
+	depends = gcc-libs
+	depends = glibc
+	optdepends = glib2: "gio trash" for the Move to Trash action in the GUI
+	optdepends = xdg-utils: Open / Reveal in the GUI
+	optdepends = chromium: standalone app window for `sdirstat gui` (any chromium-based browser works)
+	source = sdirstat-0.1.1.tar.gz::https://github.com/Ptyktos/sdirstat/archive/refs/tags/v0.1.1.tar.gz
+	sha256sums = SKIP
+
+pkgname = sdirstat
