@@ -4,6 +4,8 @@
 /usr.html
 *.html
 !src/*.html
+!docs/index.html
+/_site
 *.log
 .scratch-*
 .clone-*

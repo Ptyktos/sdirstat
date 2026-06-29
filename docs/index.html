@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sdirstat - the directory tree as a web</title>
+<meta name="description" content="sdirstat is a zero-dependency Rust filesystem indexer that emits QDirStat cache files, JSON trees, and interactive treemap reports.">
+<meta property="og:title" content="sdirstat">
+<meta property="og:description" content="Parallel scan, one reverse-pass size fold, any output: QDirStat cache, JSON, or an interactive treemap report.">
+<meta property="og:image" content="assets/social-card.png">
+<meta name="theme-color" content="#0b0d12">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0d12;
+    --panel: #0e1118;
+    --line: #1b2030;
+    --line-strong: #2c3852;
+    --text: #d7dbe3;
+    --muted: #8893a6;
+    --soft: #aeb6c6;
+    --green: #7fd1a6;
+    --blue: #5b8dff;
+    --violet: #c7a3ff;
+    --warn: #ffd166;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  a { color: inherit; }
+  .shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+  .bar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(12px);
+  }
+  .brand { display: flex; align-items: center; gap: 9px; min-width: 0; text-decoration: none; }
+  .brand img { width: 26px; height: 26px; }
+  .brand strong { font-size: 14px; color: #fff; }
+  .nav { display: flex; gap: 4px; margin-left: auto; align-items: center; }
+  .nav a, .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    padding: 5px 10px;
+    color: var(--soft);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .nav a:hover, .btn:hover { background: #1a2233; border-color: var(--line-strong); color: #fff; }
+  .btn.primary { background: #1a2233; border-color: var(--line-strong); color: #fff; }
+  main { overflow: hidden; }
+  .hero {
+    min-height: calc(100vh - 48px);
+    display: grid;
+    align-items: center;
+    padding: 42px 18px 30px;
+    border-bottom: 1px solid var(--line);
+  }
+  .hero-inner {
+    width: min(1180px, 100%);
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 0.92fr) minmax(340px, 1.08fr);
+    gap: 28px;
+    align-items: center;
+  }
+  h1 {
+    margin: 0 0 16px;
+    color: #fff;
+    font-size: clamp(42px, 8vw, 92px);
+    line-height: .88;
+    letter-spacing: 0;
+  }
+  .lede {
+    max-width: 720px;
+    margin: 0 0 22px;
+    color: var(--soft);
+    font-size: clamp(16px, 2vw, 20px);
+  }
+  .cmd {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 8px 11px;
+    border-radius: 6px;
+    border: 1px solid var(--line-strong);
+    background: #11151e;
+    color: var(--green);
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .preview {
+    border: 1px solid var(--line);
+    background: #0e1118;
+    min-width: 0;
+    box-shadow: 0 18px 50px #0008;
+  }
+  .preview-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); }
+  .dot:nth-child(2) { background: var(--green); }
+  .dot:nth-child(3) { background: var(--warn); }
+  .preview img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 2 / 1;
+    object-fit: cover;
+  }
+  .band { border-bottom: 1px solid var(--line); }
+  .wrap { width: min(1180px, 100%); margin: 0 auto; padding: 42px 18px; }
+  h2 { margin: 0 0 18px; color: #fff; font-size: 24px; letter-spacing: 0; }
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    padding: 16px;
+    min-height: 138px;
+  }
+  .card h3 { margin: 0 0 8px; color: #fff; font-size: 15px; }
+  .card p { margin: 0; color: var(--muted); }
+  .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, .8fr); gap: 22px; align-items: start; }
+  pre {
+    margin: 0;
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #090b10;
+    padding: 16px;
+    color: var(--green);
+  }
+  code { font: inherit; }
+  .steps { display: grid; gap: 8px; }
+  .step {
+    display: grid;
+    grid-template-columns: 38px 1fr;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+  }
+  .step b { color: #fff; }
+  .num { color: var(--violet); }
+  footer { padding: 20px 18px; color: var(--muted); text-align: center; }
+  @media (max-width: 820px) {
+    .bar { align-items: flex-start; }
+    .nav { overflow-x: auto; max-width: 62vw; }
+    .hero-inner, .two { grid-template-columns: 1fr; }
+    .hero { min-height: auto; }
+    .grid { grid-template-columns: 1fr; }
+    h1 { font-size: 48px; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="bar">
+    <a class="brand" href="#top" aria-label="sdirstat home">
+      <img src="assets/sdirstat.svg" alt="">
+      <strong>sdirstat</strong>
+    </a>
+    <nav class="nav" aria-label="Primary navigation">
+      <a href="#features">features</a>
+      <a href="#usage">usage</a>
+      <a href="https://github.com/Ptyktos/sdirstat/releases/latest">releases</a>
+      <a class="btn primary" href="https://github.com/Ptyktos/sdirstat">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-inner">
+        <div>
+          <h1>sdirstat</h1>
+          <p class="lede">The directory tree as a web. Parallel scan, one reverse-pass size fold, then QDirStat cache, JSON, total size, or a self-contained interactive treemap report.</p>
+          <div class="cmd"><code>sdirstat /usr -o usr.html</code></div>
+          <div class="actions">
+            <a class="btn primary" href="https://github.com/Ptyktos/sdirstat/releases/latest">Download</a>
+            <a class="btn" href="#usage">Install</a>
+            <a class="btn" href="https://github.com/Ptyktos/sdirstat/blob/main/README.md">README</a>
+          </div>
+        </div>
+        <div class="preview" aria-label="sdirstat interface preview">
+          <div class="preview-head"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>interactive report</span></div>
+          <img src="assets/social-card.png" alt="sdirstat treemap report preview">
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="band">
+      <div class="wrap">
+        <h2>Features</h2>
+        <div class="grid">
+          <article class="card"><h3>Zero runtime dependencies</h3><p>The Rust backend is std-only, while the GUI is vanilla JavaScript with no CDN and offline reports.</p></article>
+          <article class="card"><h3>Byte-exact disk usage</h3><p>Uses allocated size from blocks, deduplicates hardlinks, and supports apparent byte size when you need it.</p></article>
+          <article class="card"><h3>Multiple outputs</h3><p>Emit QDirStat cache files, nested JSON, a grand total, or a self-contained HTML report from the same scan.</p></article>
+          <article class="card"><h3>Interactive views</h3><p>Browse a squarified treemap, sunburst rings, file-type stats, sortable tree rows, and breadcrumbs.</p></article>
+          <article class="card"><h3>Desktop entry</h3><p>Install a local Linux launcher with no root, run the web GUI, or use the native Tauri desktop app.</p></article>
+          <article class="card"><h3>Fast large scans</h3><p>Parallel walking and a single reverse fold keep large filesystem scans practical and predictable.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="usage" class="band">
+      <div class="wrap two">
+        <div>
+          <h2>Use It</h2>
+          <pre><code>sdirstat /usr -o usr.html
+sdirstat serve
+sdirstat gui
+sdirstat /var --cache -o var.cache
+sdirstat /home --total
+sdirstat /srv --json</code></pre>
+        </div>
+        <div class="steps">
+          <div class="step"><span class="num">01</span><div><b>Scan once</b><br>Walk a filesystem path with the CLI or live GUI server.</div></div>
+          <div class="step"><span class="num">02</span><div><b>Fold sizes</b><br>Compute subtree totals from the same in-memory tree.</div></div>
+          <div class="step"><span class="num">03</span><div><b>Choose output</b><br>Open the HTML report, feed QDirStat, pipe JSON, or read a total.</div></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>MIT licensed. Built for local filesystem inspection, reports, and QDirStat-compatible workflows.</footer>
+</div>
+</body>
+</html>
