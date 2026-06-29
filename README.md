@@ -7,7 +7,7 @@ eating your disk, in the terminal or in a window.
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Ptyktos/sdirstat/badge)](https://scorecard.dev/viewer/?uri=github.com/Ptyktos/sdirstat)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-![sdirstat treemap GUI](assets/screenshot.png)
+![sdirstat](assets/social-card.png)
 
 Point it at a folder (or your whole disk) and it scans in parallel, then shows you where the space
 went — as an explorable **treemap**, a **sunburst**, file-type statistics, and a sortable tree-table.
