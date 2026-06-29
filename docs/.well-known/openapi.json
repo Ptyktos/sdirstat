@@ -1,0 +1,43 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "sdirstat serve — local HTTP API",
+    "version": "0.1.1",
+    "description": "Exposed by `sdirstat serve`, bound to 127.0.0.1 only (no authentication; never network-exposed — see auth.md). Default port 8080.",
+    "license": { "name": "MIT OR Apache-2.0" }
+  },
+  "servers": [{ "url": "http://127.0.0.1:8080", "description": "Loopback only" }],
+  "paths": {
+    "/scan": {
+      "get": {
+        "summary": "Scan a directory tree (cached; O(1) revisit via the directory's mtime).",
+        "parameters": [
+          { "name": "path", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Absolute path to scan" },
+          { "name": "top", "in": "query", "schema": { "type": "integer", "default": 120 }, "description": "Children kept per directory" },
+          { "name": "depth", "in": "query", "schema": { "type": "integer" } },
+          { "name": "force", "in": "query", "schema": { "type": "integer", "enum": [1] }, "description": "Skip the cache and re-walk" }
+        ],
+        "responses": { "200": { "description": "Scan result", "content": { "application/json": {
+          "schema": { "type": "object", "properties": {
+            "scan_ms": { "type": "number" },
+            "entries": { "type": "integer" },
+            "tree": { "type": "object", "description": "Nested {n,v,d,c} tree" },
+            "types": { "type": "array", "description": "Per-extension size/count" }
+          } } } } } }
+      }
+    },
+    "/act": {
+      "post": {
+        "summary": "Reversible file action (open / reveal / trash). Localhost-only; confirmed in the UI.",
+        "parameters": [
+          { "name": "op", "in": "query", "required": true, "schema": { "type": "string", "enum": ["open", "reveal", "trash"] } },
+          { "name": "path", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Result", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/mounts": { "get": { "summary": "Scannable sources (home, mounts, PVE/Docker storage).", "responses": { "200": { "description": "List of sources" } } } },
+    "/reports": { "get": { "summary": "Saved reports.", "responses": { "200": { "description": "List" } } } },
+    "/report/save": { "post": { "summary": "Save the current scan as a report.", "responses": { "200": { "description": "Saved" } } } }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "_template": "RFC 9728 OAuth 2.0 Protected Resource Metadata. TEMPLATE ONLY — sdirstat's serve API is NOT an OAuth-protected resource; it is unauthenticated and bound to 127.0.0.1 (see auth.md). Fill these in and remove `_template` only if you put the API behind a real authorization server.",
+  "resource": "https://API.EXAMPLE.COM",
+  "authorization_servers": ["https://AUTH.EXAMPLE.COM"],
+  "scopes_supported": ["sdirstat.read", "sdirstat.act"],
+  "bearer_methods_supported": ["header"],
+  "resource_documentation": "https://github.com/Ptyktos/sdirstat#readme"
+}

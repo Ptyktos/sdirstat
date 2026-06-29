@@ -1,0 +1,13 @@
+{
+  "_template": "WebMCP discoverability descriptor. TEMPLATE ONLY — WebMCP exposes MCP tools from within a web page (via the page's JS / navigator.modelContext). sdirstat's GUI is a local app, not this public site, so no in-page tools are declared here. If the hosted GUI ever exposes WebMCP tools, declare them below. Proposal: https://github.com/webmachinelearning/webmcp",
+  "webmcp": {
+    "version": "0.1",
+    "tools": [
+      {
+        "name": "scan",
+        "description": "(example) scan a path and render the treemap in-page",
+        "inputSchema": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] }
+      }
+    ]
+  }
+}

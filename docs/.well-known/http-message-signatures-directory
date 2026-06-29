@@ -1,0 +1,13 @@
+{
+  "_template": "Web Bot Auth — public-key directory (a JWKS) used to verify HTTP Message Signatures from a legitimate bot/agent operated by this project. TEMPLATE ONLY: no signing key is published yet. Generate an Ed25519 keypair, publish the PUBLIC key here, and sign outbound automated requests with the private key. Draft: https://datatracker.ietf.org/doc/draft-meunier-web-bot-auth-architecture/",
+  "keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "kid": "REPLACE-WITH-KEY-ID",
+      "x": "REPLACE-WITH-BASE64URL-PUBLIC-KEY",
+      "use": "sig",
+      "alg": "EdDSA"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+# robots.txt — sdirstat  (https://github.com/Ptyktos/sdirstat)
+# Open-source project; crawling and AI use of these public docs are welcome.
+# To restrict a use, change a Content-Signal value to `no`, or add `Disallow:` lines.
+
+# ── Content Signals (https://contentsignals.org) — how automated systems may use this content ──
+User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
+Allow: /
+
+# ── AI / LLM crawlers, called out explicitly (Bot Access Control) ──
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-Web
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: Amazonbot
+Allow: /
+
+User-agent: Applebot-Extended
+Allow: /
+
+User-agent: Bytespider
+Allow: /
+
+User-agent: meta-externalagent
+Allow: /
+
+# Machine-readable project summary for LLMs:
+# https://ptyktos.github.io/sdirstat/llms.txt
+Sitemap: https://ptyktos.github.io/sdirstat/sitemap.xml

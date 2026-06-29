@@ -1,0 +1,44 @@
+{
+  "_comment": "Agent Skills — the concrete capabilities sdirstat exposes, as invocable skills mapped to real CLI commands. Accurate today (these commands work); the hosting of an agent/MCP server around them is the template part (see mcp.json / agent.json).",
+  "name": "sdirstat",
+  "version": "0.1.1",
+  "homepage": "https://github.com/Ptyktos/sdirstat",
+  "skills": [
+    {
+      "id": "scan",
+      "name": "Scan a directory for disk usage",
+      "invocation": { "type": "cli", "command": "sdirstat <path> -o <out.html>" },
+      "inputs": { "path": "directory to scan", "out": "output report path" },
+      "output": "self-contained interactive HTML treemap report",
+      "safety": "read-only; no files modified"
+    },
+    {
+      "id": "total",
+      "name": "Grand total size of a path",
+      "invocation": { "type": "cli", "command": "sdirstat <path> --total" },
+      "output": "total bytes (and human-readable size) on stdout",
+      "safety": "read-only"
+    },
+    {
+      "id": "json",
+      "name": "Disk-usage tree as JSON",
+      "invocation": { "type": "cli", "command": "sdirstat <path> --json" },
+      "output": "nested {n,v,d,c} JSON tree",
+      "safety": "read-only"
+    },
+    {
+      "id": "qdirstat-cache",
+      "name": "Write a QDirStat cache file",
+      "invocation": { "type": "cli", "command": "sdirstat <path> --cache -o <out.cache>" },
+      "output": "QDirStat 2.0 cache file",
+      "safety": "read-only"
+    },
+    {
+      "id": "library",
+      "name": "Use as a Rust library",
+      "invocation": { "type": "rust", "command": "sdirstat::scan(path, &Config::default())" },
+      "output": "Tree { total(), entries(), to_json(), to_qdirstat_cache() }",
+      "docs": "https://docs.rs/sdirstat"
+    }
+  ]
+}

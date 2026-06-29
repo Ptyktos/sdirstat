@@ -1,0 +1,30 @@
+# sdirstat
+
+> A fast, parallel disk-usage analyzer with an interactive treemap/sunburst GUI, and a
+> zero-dependency QDirStat cache writer. Rust; CLI + local web GUI + native desktop app.
+> Dual-licensed MIT OR Apache-2.0.
+
+sdirstat scans a directory tree in parallel and shows where the space went — as an explorable
+treemap, a sunburst, file-type statistics, or a sortable table. From the same scan it can emit a
+self-contained HTML report, a QDirStat-openable cache file, a nested JSON tree, or just a grand
+total. Sizes are byte-exact with `du` (allocated `st_blocks × 512`, with hardlink dedup). The
+scanner has zero runtime dependencies (std-only).
+
+## Docs
+- [README](https://github.com/Ptyktos/sdirstat/blob/main/README.md): overview, install, usage
+- [Homepage (Markdown)](https://ptyktos.github.io/sdirstat/index.md): the site page as Markdown
+- [Deployment](https://github.com/Ptyktos/sdirstat/blob/main/docs/DEPLOYMENT.md): headless indexer + GUI service
+- [Security](https://github.com/Ptyktos/sdirstat/blob/main/SECURITY.md): the localhost-only, no-auth model
+- [Releases & verification](https://github.com/Ptyktos/sdirstat/blob/main/RELEASE.md): cosign + SLSA + checksums
+
+## Library API
+- [docs.rs](https://docs.rs/sdirstat): `sdirstat::scan(path, &Config::default()) -> Tree` → `total()`, `to_json()`, `to_qdirstat_cache()`
+
+## Local HTTP API (`sdirstat serve`)
+- [API Catalog](https://ptyktos.github.io/sdirstat/.well-known/api-catalog): endpoints exposed on `127.0.0.1` (`/scan`, `/act`, `/mounts`, `/report/*`)
+- [Auth](https://ptyktos.github.io/sdirstat/.well-known/auth.md): none — bound to loopback only by design
+
+## Install
+- Cargo: `cargo install sdirstat`
+- Arch (AUR): `yay -S sdirstat` (build from source) or `yay -S sdirstat-bin` (prebuilt)
+- Prebuilt binaries / installers: https://github.com/Ptyktos/sdirstat/releases/latest

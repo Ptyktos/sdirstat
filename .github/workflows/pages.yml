@@ -27,6 +27,9 @@ jobs:
           cp docs/index.html _site/index.html
           cp assets/social-card.png _site/assets/social-card.png
           cp packaging/sdirstat.svg _site/assets/sdirstat.svg
+          # AI / agent discovery files (see docs/AI-DISCOVERY.md)
+          cp -r docs/.well-known _site/.well-known
+          cp docs/robots.txt docs/sitemap.xml docs/llms.txt docs/index.md docs/AI-DISCOVERY.md _site/
       - name: Build signed apt repo at /apt (if a release .deb + GPG key exist)
         env:
           GH_TOKEN: ${{ github.token }}

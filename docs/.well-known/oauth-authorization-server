@@ -1,0 +1,13 @@
+{
+  "_template": "RFC 8414 OAuth 2.0 Authorization Server Metadata. TEMPLATE ONLY — sdirstat runs no OAuth server (its serve API is unauthenticated and loopback-only; see auth.md). Fill these in and remove `_template` if/when you front it with a real authorization server.",
+  "issuer": "https://AUTH.EXAMPLE.COM",
+  "authorization_endpoint": "https://AUTH.EXAMPLE.COM/authorize",
+  "token_endpoint": "https://AUTH.EXAMPLE.COM/token",
+  "registration_endpoint": "https://AUTH.EXAMPLE.COM/register",
+  "jwks_uri": "https://AUTH.EXAMPLE.COM/.well-known/jwks.json",
+  "scopes_supported": ["openid", "profile", "sdirstat.read"],
+  "response_types_supported": ["code"],
+  "grant_types_supported": ["authorization_code", "client_credentials"],
+  "code_challenge_methods_supported": ["S256"],
+  "token_endpoint_auth_methods_supported": ["none", "client_secret_basic"]
+}

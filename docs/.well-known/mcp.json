@@ -1,0 +1,35 @@
+{
+  "_template": "MCP Server Card. TEMPLATE ONLY — there is no hosted sdirstat MCP server at this origin yet. This sketches the tools a thin MCP wrapper around the sdirstat CLI/library would expose; set `url`/transport and remove `_template` once a server exists. MCP: https://modelcontextprotocol.io",
+  "schemaVersion": "2025-06-18",
+  "name": "sdirstat",
+  "title": "sdirstat disk-usage scanner",
+  "description": "Scan a directory tree and report disk usage (treemap data, totals, QDirStat cache, JSON).",
+  "version": "0.1.1",
+  "vendor": { "name": "TWN Systems", "url": "https://github.com/Ptyktos/sdirstat" },
+  "transport": { "type": "stdio", "command": "sdirstat-mcp", "_note": "or { type: 'streamable-http', url: 'https://MCP.EXAMPLE.COM/mcp' }" },
+  "capabilities": { "tools": {} },
+  "tools": [
+    {
+      "name": "scan_path",
+      "description": "Scan a directory and return total bytes, entry count, and the nested size tree.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Absolute path to scan" },
+          "apparent": { "type": "boolean", "default": false, "description": "Logical (st_size) instead of allocated size" }
+        },
+        "required": ["path"]
+      }
+    },
+    {
+      "name": "total",
+      "description": "Return only the grand total size of a path (fast).",
+      "inputSchema": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] }
+    },
+    {
+      "name": "to_qdirstat_cache",
+      "description": "Emit a QDirStat 2.0 cache file for a path.",
+      "inputSchema": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] }
+    }
+  ]
+}
