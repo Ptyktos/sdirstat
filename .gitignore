@@ -5,6 +5,7 @@
 *.html
 !src/*.html
 !docs/index.html
+!desktop/ui/*.html
 /_site
 *.log
 .scratch-*
