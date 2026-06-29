@@ -1,0 +1,24 @@
+{
+  "_comment": "RFC 9727 API Catalog (a RFC 9264 linkset). sdirstat's API is the local `sdirstat serve` HTTP server bound to 127.0.0.1 — it is run on the user's own machine, not hosted at this origin. The library API is on docs.rs.",
+  "linkset": [
+    {
+      "anchor": "https://github.com/Ptyktos/sdirstat",
+      "service-desc": [
+        {
+          "href": "https://ptyktos.github.io/sdirstat/.well-known/openapi.json",
+          "type": "application/json",
+          "title": "sdirstat serve — local 127.0.0.1 HTTP API (OpenAPI)"
+        }
+      ],
+      "service-doc": [
+        { "href": "https://github.com/Ptyktos/sdirstat#readme", "type": "text/html", "title": "README" },
+        { "href": "https://docs.rs/sdirstat", "type": "text/html", "title": "Library API (docs.rs)" },
+        { "href": "https://github.com/Ptyktos/sdirstat/blob/main/docs/DEPLOYMENT.md", "type": "text/html", "title": "Deployment / GUI service" }
+      ],
+      "service-meta": [
+        { "href": "https://ptyktos.github.io/sdirstat/llms.txt", "type": "text/plain", "title": "LLM summary" },
+        { "href": "https://ptyktos.github.io/sdirstat/.well-known/auth.md", "type": "text/markdown", "title": "Auth model" }
+      ]
+    }
+  ]
+}
