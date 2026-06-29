@@ -1,9 +1,5 @@
 #!/bin/sh
-# Launch the sdirstat web GUI: start the localhost server and open the browser.
-PORT="${SDIRSTAT_PORT:-8080}"
-sdirstat serve --port "$PORT" &
-SRV=$!
-trap 'kill $SRV 2>/dev/null' INT TERM EXIT
-sleep 1
-xdg-open "http://127.0.0.1:$PORT" >/dev/null 2>&1 || true
-wait $SRV
+# Back-compat shim: the GUI launcher is now a built-in subcommand. `sdirstat gui` starts the
+# localhost server and opens the GUI as a standalone app window (chromium --app), falling back
+# to the default browser.
+exec sdirstat gui "$@"

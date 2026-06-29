@@ -8,11 +8,18 @@ Headless filesystem indexer. **Parallel scan → one reverse-pass size fold → 
 
 ```sh
 sdirstat /usr -o usr.html             # self-contained interactive HTML report
+sdirstat install-desktop               # add a clickable "sdirstat" app to your menu (Linux, no root)
+sdirstat gui                           # open the GUI as a standalone desktop app window
 sdirstat serve                         # live web GUI at http://127.0.0.1:8080
 sdirstat /var --cache -o var.cache     # QDirStat cache file (drop-in for Perl writer)
 sdirstat /home --total                 # grand total, fast
 sdirstat /srv --json | jq '…'         # JSON tree for your own tooling
 ```
+
+From a single downloaded binary to a real desktop app: `sdirstat install-desktop` writes an
+XDG `.desktop` entry + icon under `~/.local/share` (no root, no package), and clicking it runs
+`sdirstat gui` — the GUI in a standalone app window (chromium `--app`, falling back to your
+browser). For a fully native window instead, install the [desktop app](desktop/) (Tauri).
 
 ## Features
 
