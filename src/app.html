@@ -91,6 +91,7 @@
     <div class="btn" id="srcbtn" title="Sources &amp; Reports">☰</div>
     <input id="path" placeholder="/path/to/scan">
     <div class="btn" id="scan">Scan</div>
+    <div class="btn" id="rescan" title="Rescan — force a fresh walk, ignoring the cache">↻</div>
     <div id="crumbs"></div>
     <div class="btn on" id="vmap" title="Treemap (QDirStat)">▦ map</div>
     <div class="btn" id="vsun" title="Sunburst (Baobab)">◎ rings</div>
@@ -195,7 +196,8 @@ function augment(node, parent, depth){
 async function refreshSubtree(node){
   if(!node) return 0;
   const t0=performance.now(), old=node.v||0;
-  const r=await fetch('/scan?path='+encodeURIComponent(fullPath(node))+'&top=600&depth=6');
+  // force=1: the subtree just changed (a trash), so re-walk it — don't certify the stale cache.
+  const r=await fetch('/scan?path='+encodeURIComponent(fullPath(node))+'&top=600&depth=6&force=1');
   const j=await r.json();
   if(j.tree){
     node.c=j.tree.c||[]; node.v=j.tree.v;
@@ -388,13 +390,16 @@ function loadScan(j, label, source){
   scanPath=label||TREE.n; curSource=source||'fs'; lastMs=j.scan_ms; lastEnt=j.entries;
   $('path').value=scanPath; renderAll();
 }
-async function scan(path){
+// `force` (the ↻ Rescan button) appends &force=1 → the server skips the encircle residual and
+// re-walks. Without it, the server certifies an unchanged path from cache (no re-walk).
+async function scan(path,force){
   $('busy').style.display='flex';
-  try{ const j=await (await fetch('/scan?path='+encodeURIComponent(path)+'&top=120')).json(); loadScan(j,null,'fs'); }
+  try{ const j=await (await fetch('/scan?path='+encodeURIComponent(path)+'&top=120'+(force?'&force=1':''))).json(); loadScan(j,null,'fs'); }
   catch(e){alert('scan failed: '+e)}
   $('busy').style.display='none';
 }
 $('scan').onclick=()=>scan($('path').value);
+$('rescan').onclick=()=>scan($('path').value,true);
 $('path').addEventListener('keydown',e=>{if(e.key==='Enter')scan($('path').value)});
 
 // ---- Sources & Reports drawer ----

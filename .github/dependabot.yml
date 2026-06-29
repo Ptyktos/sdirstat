@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Core crate (zero-dep today, but io_uring/std pins still get security updates).
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # Desktop app crate (the Tauri dependency tree).
+  - package-ecosystem: cargo
+    directory: "/desktop"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # The GitHub Actions themselves — keeps the pinned SHAs current.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

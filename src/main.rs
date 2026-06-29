@@ -22,7 +22,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 struct Node {
     parent: usize,
@@ -550,6 +550,86 @@ fn scan_response(root: &str, cfg: &Cfg) -> (String, u64, usize) {
     finish(nodes, t0.elapsed().as_secs_f64() * 1e3, cfg)
 }
 
+// ── the scan cache — O(1) retrieval at the path coordinate (NullWebRetrieval: "an O(1) navigation,
+//    not a search"). A scanned path's response is cached, keyed by the path (HashTrinity `get`, O(1)).
+//    Validation reads ONE coordinate — the scanned directory's own mtime — in O(1): unchanged ⇒ certify
+//    the cache (no re-walk); changed ⇒ rescan. This is "read each flaw at its OWN coordinate," NOT an
+//    enumeration: a change inside a SUBdirectory is caught when you navigate INTO it (that child path is
+//    its own cache key, validated by its own mtime, O(1) per step) — or eagerly via the Rescan button.
+//    `force` (Rescan) skips the check. mtime catches add/remove/rename at the coordinate; in-place file
+//    growth that leaves the dir mtime is the Rescan case.
+struct Cached {
+    body: String,
+    root_mtime: i128, // the scanned directory's own mtime — the single O(1) coordinate a revisit reads
+    touched: std::time::Instant,
+}
+fn scan_cache() -> &'static Mutex<HashMap<String, Cached>> {
+    static C: OnceLock<Mutex<HashMap<String, Cached>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+const SCAN_CACHE_CAP: usize = 32;
+
+/// A directory's mtime in **nanoseconds** — fine enough to catch a sub-second change (a same-second
+/// `st_mtime` in seconds would miss it). `None` if the path is gone — a deletion is itself a flaw
+/// (`≠ Some(snapshot)`), so the cache invalidates. Snapshot and recheck both go through here, so the
+/// two readings are always comparable.
+#[cfg(unix)]
+fn mtime_of(p: &str) -> Option<i128> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(p).ok().map(|m| m.mtime() as i128 * 1_000_000_000 + m.mtime_nsec() as i128)
+}
+#[cfg(not(unix))]
+fn mtime_of(p: &str) -> Option<i128> {
+    std::fs::symlink_metadata(p).ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as i128)
+}
+
+/// Scan a path through the cache. `force` (the Rescan button) skips the check and re-walks.
+/// The hit path is O(1): one `stat` of the path's own directory + a `HashMap` get — no enumeration.
+fn scan_cached(path: &str, cfg: &Cfg, force: bool) -> String {
+    // Key by (canonical path, emit shape): different `top`/`depth`/metric views render to different
+    // bodies, so they cache as distinct coordinates.
+    let canon = std::fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    let key = format!("{canon}|t{}|d{}|a{}", cfg.top, cfg.max_depth, cfg.apparent as u8);
+    let now_mtime = mtime_of(&canon); // O(1): one stat of the scanned directory itself — the coordinate
+
+    if !force {
+        let hit = {
+            let cache = scan_cache().lock().unwrap();
+            cache.get(&key).and_then(|e| {
+                if Some(e.root_mtime) == now_mtime { Some(e.body.clone()) } else { None }
+            })
+        };
+        if let Some(body) = hit {
+            if let Some(e) = scan_cache().lock().unwrap().get_mut(&key) {
+                e.touched = std::time::Instant::now();
+            }
+            return body; // O(1) certify — the coordinate's mtime is unchanged
+        }
+    }
+
+    // Cold, a flaw, or forced: full scan WITHOUT holding the lock, then recache. The ONLY overhead
+    // added to a cold scan is `now_mtime` above (one stat) — O(1), no extra pass over the arena.
+    let t0 = std::time::Instant::now();
+    let croot = std::fs::canonicalize(path).unwrap_or_else(|_| Path::new(path).to_path_buf());
+    let nodes = scan_backend(Path::new(path), croot.to_string_lossy().into_owned(), cfg);
+    let (body, _, _) = finish(nodes, t0.elapsed().as_secs_f64() * 1e3, cfg);
+    let mut cache = scan_cache().lock().unwrap();
+    if cache.len() >= SCAN_CACHE_CAP && !cache.contains_key(&key) {
+        // Bounded eviction over ≤ SCAN_CACHE_CAP entries (a constant) — off the hot path, on insert
+        // overflow only; the scan/revisit paths above never loop.
+        if let Some(k) = cache.iter().min_by_key(|(_, v)| v.touched).map(|(k, _)| k.clone()) {
+            cache.remove(&k); // evict least-recently-touched
+        }
+    }
+    cache.insert(key, Cached { body: body.clone(), root_mtime: now_mtime.unwrap_or(i128::MIN), touched: std::time::Instant::now() });
+    body
+}
+
 /// One query parameter from `…?a=1&b=2`, URL-decoded.
 fn qparam(target: &str, key: &str) -> Option<String> {
     let q = target.splitn(2, '?').nth(1)?;
@@ -994,7 +1074,8 @@ fn handle_conn(mut stream: TcpStream, base: Cfg) {
         let path = qparam(target, "path").unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
         if let Some(t) = qparam(target, "top").and_then(|v| v.parse().ok()) { cfg.top = t; }
         if let Some(d) = qparam(target, "depth").and_then(|v| v.parse().ok()) { cfg.max_depth = d; }
-        let (body, _, _) = scan_response(&path, &cfg);
+        let force = qparam(target, "force").as_deref() == Some("1");
+        let body = scan_cached(&path, &cfg, force);
         http_write(&mut stream, "200 OK", "application/json", body.as_bytes());
         return;
     }
@@ -1064,12 +1145,140 @@ fn serve(port: u16, cfg: Cfg) {
     }
 }
 
+/// An OS-assigned free localhost port (bind :0, read it back, release it). Falls back to 8080.
+fn free_port() -> u16 {
+    TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|l| l.local_addr())
+        .map(|a| a.port())
+        .unwrap_or(8080)
+}
+
+/// Is `bin` an executable on `PATH`? (Keeps the zero-dep ethic — no `which` crate.)
+fn on_path(bin: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
+        .unwrap_or(false)
+}
+
+/// `sdirstat gui` — the desktop-launcher entry point: serve the GUI on a private loopback port and
+/// open it as a standalone **app window** (not a browser tab). Blocks until the window is closed.
+/// This is what the installed `.desktop` runs, so the binary alone is a usable desktop app.
+fn gui(cfg: Cfg) {
+    let port = free_port();
+    let server = std::thread::spawn(move || serve(port, cfg));
+    let url = format!("http://127.0.0.1:{port}/");
+    // wait for the server to bind (well under a second) before opening the window
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(5) {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+    if !open_app_window(&url) {
+        // No app-mode browser: a tab was opened instead — keep serving until the process is killed.
+        let _ = server.join();
+    }
+}
+
+/// Open `url` as a dedicated app window. Prefers a chromium-family browser in `--app` mode (a clean
+/// frameless window; `--class=sdirstat` so it groups under the .desktop entry) with a throwaway
+/// profile so it is our own process to wait on. Returns true if such a window ran (and has since
+/// closed); false if it fell back to the default browser (a tab), which does not block.
+fn open_app_window(url: &str) -> bool {
+    let chromium = ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "brave-browser"]
+        .into_iter()
+        .find(|b| on_path(b));
+    if let Some(browser) = chromium {
+        let prof = std::env::temp_dir().join(format!("sdirstat-gui-{}", std::process::id()));
+        let status = Command::new(browser)
+            .arg(format!("--app={url}"))
+            .arg("--class=sdirstat")
+            .arg("--no-first-run")
+            .arg(format!("--user-data-dir={}", prof.display()))
+            .status();
+        let _ = std::fs::remove_dir_all(&prof);
+        return status.map(|s| s.success()).unwrap_or(false);
+    }
+    let _ = Command::new("xdg-open").arg(url).status();
+    false
+}
+
+/// `sdirstat install-desktop` — register a clickable menu entry for the GUI under the current user
+/// (no root, no package needed). Writes an icon and a `.desktop` launcher that runs `<this binary>
+/// gui`, so a single downloaded binary becomes a first-class desktop application.
+#[cfg(target_os = "linux")]
+fn install_desktop() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let home = std::env::var("HOME")
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))?;
+    let data = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{home}/.local/share"));
+    let apps = format!("{data}/applications");
+    let icondir = format!("{data}/icons/hicolor/scalable/apps");
+    std::fs::create_dir_all(&apps)?;
+    std::fs::create_dir_all(&icondir)?;
+    std::fs::write(format!("{icondir}/sdirstat.svg"), include_str!("../packaging/sdirstat.svg"))?;
+    let entry = format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=sdirstat\n\
+         GenericName=Disk Usage Analyzer\n\
+         Comment=Explore disk usage as an interactive treemap or sunburst\n\
+         Exec=\"{exe}\" gui\n\
+         Icon=sdirstat\n\
+         Terminal=false\n\
+         Categories=Utility;System;Filesystem;\n\
+         Keywords=disk;usage;treemap;sunburst;du;space;analyzer;\n\
+         StartupWMClass=sdirstat\n",
+        exe = exe.display()
+    );
+    let path = format!("{apps}/sdirstat.desktop");
+    std::fs::write(&path, entry)?;
+    let _ = Command::new("update-desktop-database").arg(&apps).status();
+    println!(
+        "installed: {path}\nicon:      {icondir}/sdirstat.svg\n\nLaunch \"sdirstat\" from your application menu, or run: {} gui",
+        exe.display()
+    );
+    Ok(())
+}
+
+/// `sdirstat uninstall-desktop` — remove the user `.desktop` entry and icon from install-desktop.
+#[cfg(target_os = "linux")]
+fn uninstall_desktop() -> std::io::Result<()> {
+    let home = std::env::var("HOME")
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME not set"))?;
+    let data = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{home}/.local/share"));
+    let apps = format!("{data}/applications");
+    let desktop = format!("{apps}/sdirstat.desktop");
+    let icon = format!("{data}/icons/hicolor/scalable/apps/sdirstat.svg");
+    let _ = std::fs::remove_file(&desktop);
+    let _ = std::fs::remove_file(&icon);
+    let _ = Command::new("update-desktop-database").arg(&apps).status();
+    println!("removed: {desktop}");
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn install_desktop() -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "install-desktop is Linux-only (XDG .desktop). Use `sdirstat gui` to open the app window.",
+    ))
+}
+#[cfg(not(target_os = "linux"))]
+fn uninstall_desktop() -> std::io::Result<()> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "uninstall-desktop is Linux-only."))
+}
+
 const USAGE: &str = "\
 sdirstat — parallel disk-usage analyzer (treemap/sunburst web GUI + QDirStat cache)
 
 USAGE
   sdirstat <path> [options]      scan a directory (default: writes report.html)
   sdirstat serve [-p PORT]       live web GUI at http://127.0.0.1:PORT (default 8080)
+  sdirstat gui                   open the GUI as a standalone desktop app window
+  sdirstat install-desktop       add a clickable \"sdirstat\" app to your menu (Linux, no root)
+  sdirstat uninstall-desktop     remove that menu entry
 
 OUTPUT (default: a self-contained HTML treemap report)
   --json                emit a nested JSON tree instead
@@ -1107,6 +1316,9 @@ fn main() {
     while let Some(a) = it.next() {
         match a.as_str() {
             "serve" => mode = "serve",
+            "gui" => mode = "gui",
+            "install-desktop" => mode = "install-desktop",
+            "uninstall-desktop" => mode = "uninstall-desktop",
             "--port" | "-p" => port = it.next().and_then(|s| s.parse().ok()).unwrap_or(8080),
             "--json" => mode = "json",
             "--cache" => mode = "cache",
@@ -1129,6 +1341,24 @@ fn main() {
     }
     if mode == "serve" {
         serve(port, cfg);
+        return;
+    }
+    if mode == "gui" {
+        gui(cfg);
+        return;
+    }
+    if mode == "install-desktop" {
+        if let Err(e) = install_desktop() {
+            eprintln!("install-desktop failed: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if mode == "uninstall-desktop" {
+        if let Err(e) = uninstall_desktop() {
+            eprintln!("uninstall-desktop failed: {e}");
+            std::process::exit(1);
+        }
         return;
     }
     if out.is_empty() {
