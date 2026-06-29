@@ -1,0 +1,30 @@
+# Maintainer: Clay Townsend <clay@twn.systems>
+pkgname=sdirstat-bin
+pkgver=0.1.1
+pkgrel=1
+pkgdesc="Fast parallel disk-usage analyzer with a treemap/sunburst GUI (prebuilt binary)"
+arch=('x86_64')
+url="https://github.com/Ptyktos/sdirstat"
+license=('MIT' 'Apache-2.0')
+depends=('gcc-libs' 'glibc')
+optdepends=('glib2: "gio trash" for the Move to Trash action in the GUI'
+            'xdg-utils: Open / Reveal in the GUI'
+            'chromium: standalone app window for `sdirstat gui` (any chromium-based browser works)')
+provides=('sdirstat')
+conflicts=('sdirstat')
+source=("sdirstat-$pkgver::$url/releases/download/v$pkgver/sdirstat-$pkgver-linux-x86_64"
+        "sdirstat.desktop::https://raw.githubusercontent.com/Ptyktos/sdirstat/v$pkgver/packaging/sdirstat.desktop"
+        "sdirstat.svg::https://raw.githubusercontent.com/Ptyktos/sdirstat/v$pkgver/packaging/sdirstat.svg"
+        "LICENSE-MIT::https://raw.githubusercontent.com/Ptyktos/sdirstat/v$pkgver/LICENSE-MIT"
+        "LICENSE-APACHE::https://raw.githubusercontent.com/Ptyktos/sdirstat/v$pkgver/LICENSE-APACHE")
+# Replace SKIP with the real checksums once v$pkgver is released (e.g. `updpkgsums`); the .exe
+# checksum is also in the release SHA256SUMS.
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+package() {
+  install -Dm755 "sdirstat-$pkgver" "$pkgdir/usr/bin/sdirstat"
+  install -Dm644 sdirstat.desktop   "$pkgdir/usr/share/applications/sdirstat.desktop"
+  install -Dm644 sdirstat.svg       "$pkgdir/usr/share/icons/hicolor/scalable/apps/sdirstat.svg"
+  install -Dm644 LICENSE-MIT        "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 LICENSE-APACHE     "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+}

@@ -1,0 +1,27 @@
+pkgbase = sdirstat-bin
+	pkgdesc = Fast parallel disk-usage analyzer with a treemap/sunburst GUI (prebuilt binary)
+	pkgver = 0.1.1
+	pkgrel = 1
+	url = https://github.com/Ptyktos/sdirstat
+	arch = x86_64
+	license = MIT
+	license = Apache-2.0
+	depends = gcc-libs
+	depends = glibc
+	optdepends = glib2: "gio trash" for the Move to Trash action in the GUI
+	optdepends = xdg-utils: Open / Reveal in the GUI
+	optdepends = chromium: standalone app window for `sdirstat gui` (any chromium-based browser works)
+	provides = sdirstat
+	conflicts = sdirstat
+	source = sdirstat-0.1.1::https://github.com/Ptyktos/sdirstat/releases/download/v0.1.1/sdirstat-0.1.1-linux-x86_64
+	source = sdirstat.desktop::https://raw.githubusercontent.com/Ptyktos/sdirstat/v0.1.1/packaging/sdirstat.desktop
+	source = sdirstat.svg::https://raw.githubusercontent.com/Ptyktos/sdirstat/v0.1.1/packaging/sdirstat.svg
+	source = LICENSE-MIT::https://raw.githubusercontent.com/Ptyktos/sdirstat/v0.1.1/LICENSE-MIT
+	source = LICENSE-APACHE::https://raw.githubusercontent.com/Ptyktos/sdirstat/v0.1.1/LICENSE-APACHE
+	sha256sums = SKIP
+	sha256sums = SKIP
+	sha256sums = SKIP
+	sha256sums = SKIP
+	sha256sums = SKIP
+
+pkgname = sdirstat-bin
