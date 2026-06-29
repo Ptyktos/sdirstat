@@ -29,5 +29,5 @@ proxying to `127.0.0.1:8080`. The `/act` endpoint acts on the server's filesyste
 user — gate it accordingly.
 
 See [SECURITY.md](https://github.com/Ptyktos/sdirstat/blob/main/SECURITY.md) for the full security
-model. The `oauth-authorization-server` / `oauth-protected-resource` documents in this directory are
-**templates** — sdirstat itself is not an OAuth-protected resource.
+model. There is intentionally no `oauth-authorization-server` / `oauth-protected-resource` document
+here: sdirstat is not an OAuth-protected resource, and its absence is the correct signal.
