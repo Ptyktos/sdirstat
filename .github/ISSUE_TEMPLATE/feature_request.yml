@@ -1,0 +1,61 @@
+name: ✨ Feature request
+description: Suggest an improvement or new capability
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Note the project's load-bearing constraint: the **core scanner is zero-dependency** (std-only).
+        Proposals that add a crate to the backend are a maintainer decision (see
+        [MAINTAINERS.md](https://github.com/Ptyktos/sdirstat/blob/main/MAINTAINERS.md) /
+        [CONTRIBUTING.md](https://github.com/Ptyktos/sdirstat/blob/main/CONTRIBUTING.md)).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do, and where does sdirstat fall short today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like it to do? CLI flags, GUI behavior, output format, etc.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Scanner / size semantics
+        - CLI / output formats (cache, JSON, HTML)
+        - Web GUI (serve)
+        - Desktop app (Tauri) / gui
+        - Caching / navigation
+        - Packaging / distribution
+        - Docs
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true
+        - label: This keeps the core scanner zero-dependency, or I've noted why a dependency is warranted.
+          required: false
