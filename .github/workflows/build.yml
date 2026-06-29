@@ -1,0 +1,127 @@
+# Build workflow — produces downloadable binaries + installers for Linux/macOS/Windows as workflow
+# ARTIFACTS (no release, no signing). Runs on pushes to main and on demand (Actions ▸ build ▸ Run
+# workflow), so the cross-OS builds — especially Windows/macOS — can be exercised without cutting a
+# tag. PR checks stay on the fast ci.yml; the signed/published release is release.yml (on a v* tag).
+#
+# Windows output: portable sdirstat.exe (CLI) + a proper installer — the Tauri MSI/NSIS (Tauri manages
+# the WiX/NSIS toolchain) and a cargo-wix CLI .msi (best-effort).
+#
+# TESTED STATUS: the Linux jobs follow the proven release.yml path; the Windows/macOS jobs are
+# unexecuted until this workflow is run — that's the point of having it.
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: CLI — portable, static musl, .deb
+        run: |
+          set -eu
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+          cargo build --release --locked
+          sh packaging/build-deb.sh 0.1.0
+          cargo build --release --locked --target x86_64-unknown-linux-musl
+          mkdir -p out
+          cp target/release/sdirstat                           out/sdirstat-linux-x86_64
+          cp target/x86_64-unknown-linux-musl/release/sdirstat out/sdirstat-linux-x86_64-musl
+          cp dist/*.deb out/ 2>/dev/null || true
+      - name: Desktop — .deb (+ AppImage, best-effort)
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          NO_STRIP: "true"
+        run: |
+          set -eu
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
+          cargo install tauri-cli --version "^2" --locked
+          mkdir -p desktop/binaries
+          cp target/release/sdirstat desktop/binaries/sdirstat-x86_64-unknown-linux-gnu
+          ( cd desktop && cargo tauri build --bundles deb )
+          cp desktop/target/release/bundle/deb/*.deb out/ || true
+          if ( cd desktop && cargo tauri build --bundles appimage ); then
+            cp desktop/target/release/bundle/appimage/*.AppImage out/ || true
+          else
+            echo "::warning::AppImage skipped (linuxdeploy-plugin-gtk)"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with: { name: linux, path: out/* }
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: CLI — universal (Intel + Apple Silicon)
+        run: |
+          set -eu
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          cargo build --release --locked --target aarch64-apple-darwin
+          mkdir -p out
+          lipo -create -output out/sdirstat-macos-universal \
+            target/x86_64-apple-darwin/release/sdirstat \
+            target/aarch64-apple-darwin/release/sdirstat
+      - name: Desktop — universal .dmg
+        run: |
+          set -eu
+          cargo install tauri-cli --version "^2" --locked
+          mkdir -p desktop/binaries
+          cp out/sdirstat-macos-universal desktop/binaries/sdirstat-universal-apple-darwin
+          ( cd desktop && cargo tauri build --target universal-apple-darwin --bundles dmg )
+          cp desktop/target/universal-apple-darwin/release/bundle/dmg/*.dmg out/ || echo "::warning::dmg skipped"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with: { name: macos, path: out/* }
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: CLI — portable sdirstat.exe (native MSVC)
+        shell: bash
+        run: |
+          set -eu
+          cargo build --release --locked
+          mkdir -p out
+          cp target/release/sdirstat.exe out/sdirstat-windows-x86_64.exe
+
+      - name: Install WiX + cargo-wix (own step so the WIX env propagates)
+        shell: bash
+        run: |
+          set -eu
+          if [ -z "${WIX:-}" ]; then choco install wixtoolset --no-progress -y || echo "WiX install issue"; fi
+          cargo install cargo-wix --locked || echo "cargo-wix install issue"
+
+      - name: CLI installer — cargo-wix .msi (best-effort, untested)
+        shell: bash
+        run: |
+          set -eu
+          cargo wix init --force || echo "wix init issue"
+          if cargo wix --no-build --nocapture --output out/ ; then
+            echo "MSI built"
+          else
+            echo "::warning::cargo-wix MSI failed (untested on a real runner — adjust wix/main.wxs)"
+          fi
+
+      - name: Desktop installer — Tauri .msi + NSIS .exe
+        shell: bash
+        run: |
+          set -eu
+          cargo install tauri-cli --version "^2" --locked
+          mkdir -p desktop/binaries
+          cp target/release/sdirstat.exe desktop/binaries/sdirstat-x86_64-pc-windows-msvc.exe
+          ( cd desktop && cargo tauri build )
+          cp desktop/target/release/bundle/msi/*.msi  out/ || echo "msi skipped"
+          cp desktop/target/release/bundle/nsis/*.exe out/ || echo "nsis skipped"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with: { name: windows, path: out/* }
