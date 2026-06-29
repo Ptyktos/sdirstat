@@ -2,6 +2,9 @@
 
 ![sdirstat social preview](assets/social-card.png)
 
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Ptyktos/sdirstat/badge)](https://scorecard.dev/viewer/?uri=github.com/Ptyktos/sdirstat)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
 Headless filesystem indexer. **Parallel scan → one reverse-pass size fold → any output.** Emits QDirStat cache files, nested JSON, or an interactive report. The zero-dep Rust replacement for Perl `qdirstat-cache-writer`. Also ships a squarified treemap + sunburst web GUI.
 
 ## Quick start
@@ -28,6 +31,7 @@ browser). For a fully native window instead, install the [desktop app](desktop/)
 - **Three output formats** — QDirStat cache (drop-in for `qdirstat-cache-writer`), nested JSON, self-contained HTML with treemap.
 - **Interactive web GUI** (`serve`) — squarified treemap, sunburst, file-type stats, sortable tree-table, breadcrumb navigation, right-click file actions (Open / Reveal / Copy path / Move to Trash).
 - **Incremental trash** — after moving files to trash, only the changed subtree is re-scanned (~10 ms, not a full re-scan).
+- **O(1) navigation cache** (`serve`) — revisiting a path certifies from cache by reading one coordinate (the directory's own mtime); it re-walks only when that coordinate changed, or on demand (↻ Rescan).
 - **Parallel walk** — one pass to build the full tree + any output format.
 - **OOM-guarded** — `--max-entries` ceiling (default 32M) prevents pathological scans.
 - **io_uring backend** (`--iouring`) — batched `statx` for cold / SSD-bound scans.
@@ -47,6 +51,14 @@ Filesystem analysis tools are either interactive GUI apps (Baobab, QDirStat, Fil
 | [webfold](https://gitlab.tas.twn.network/twn/RnD/webfold) | HTML / WARC / PDF → Markdown |
 | [chunkfold](https://gitlab.tas.twn.network/twn/RnD/chunkfold) | Chunking as coordinate read |
 
+## Releases & verification
+
+Binaries and installers are built by CI on a `v*` tag and published to GitHub Releases. Every artifact
+is checksummed (`SHA256SUMS`), ships an SPDX SBOM, is signed with [cosign](https://docs.sigstore.dev)
+(keyless), and carries [SLSA build provenance](https://slsa.dev). See [RELEASE.md](RELEASE.md) and
+[docs/SIGNING.md](docs/SIGNING.md) to verify a download.
+
 ## License
 
-MIT
+Dual-licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+Contributions are accepted under the same dual license.

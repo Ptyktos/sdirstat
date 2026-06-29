@@ -1,0 +1,8 @@
+# Code owners — auto-requested for review on matching paths (also satisfies the OpenSSF Scorecard
+# "Code-Review" signal). Adjust the handle/team to the actual GitHub maintainer(s); `@Ptyktos` is the
+# repository owner on the GitHub mirror.
+* @Ptyktos
+
+# The zero-dependency core scanner and the cache/size semantics are load-bearing (see MAINTAINERS.md).
+/src/        @Ptyktos
+/Cargo.toml  @Ptyktos
