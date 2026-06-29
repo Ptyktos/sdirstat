@@ -1,9 +1,17 @@
-# Cross-platform GUI — plan & preparation
+# Cross-platform GUI — plan & status
 
-Today sdirstat ships a **web GUI** (`sdirstat serve`) that is already cross-platform *at the view
-layer* — it runs in any browser on any OS. What is **not** yet portable is the **backend**: the
-scanner and the file actions use Linux-specific facilities. This document is the plan to reach a
-native, cross-platform desktop app, and the preparation that makes it cheap.
+> **Status (implemented).** The native desktop app now exists in [`../desktop/`](../desktop/) — a
+> Tauri shell that bundles the `sdirstat` binary as a **sidecar** (`sdirstat serve` on a private
+> loopback port) and opens a native window at that URL. The existing `app.html` + `/scan`/`/act`
+> run unchanged, so there was **no frontend rewrite and no change to the zero-dep core** (Tauri
+> lives in an isolated crate, excluded from the root workspace). It builds to native installers:
+> Linux `.deb` (verified), Windows `.msi`/NSIS `.exe`, macOS universal `.dmg` — see
+> `.github/workflows/release.yml`. The notes below are retained as the original design rationale.
+
+Originally sdirstat shipped only a **web GUI** (`sdirstat serve`), cross-platform *at the view
+layer* — it runs in any browser on any OS. What was **not** portable was the **backend**: the
+scanner and the file actions use Linux-specific facilities. This document was the plan to reach a
+native, cross-platform desktop app, and the preparation that made it cheap.
 
 ## Goal
 

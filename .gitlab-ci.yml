@@ -53,5 +53,8 @@ windows-exe:
     paths: [dist/sdirstat.exe]
     expire_in: 90 days
 
-# A Windows .msi installer (cargo-wix) and a macOS build (needs an osx runner) are the next
-# packaging steps; the portable .exe above already covers "portable run" on Windows.
+# macOS binaries (Intel + Apple Silicon, universal) build on GitHub's free Mac
+# runner via .github/workflows/release.yml, which also cuts a public GitHub Release
+# with the Linux/Windows/macOS binaries on every `v*` tag. A Windows .msi installer
+# (cargo-wix) is the next packaging step; the portable .exe above already covers
+# "portable run" on Windows.

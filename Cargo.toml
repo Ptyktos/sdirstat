@@ -17,3 +17,8 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 panic = "abort"
+
+# The native desktop app lives in desktop/ and pulls in the Tauri dependency tree. It is kept
+# OUT of this workspace so the core binary stays std-only and its build/CI are unaffected.
+[workspace]
+exclude = ["desktop"]
