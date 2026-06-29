@@ -71,6 +71,24 @@ jobs:
           cargo build --release --locked
           mkdir -p dist
           cp target/release/sdirstat.exe "dist/sdirstat-${VER}-windows-x86_64.exe"
+      - name: Install WiX + cargo-wix (own step so the WIX env propagates)
+        shell: bash
+        run: |
+          set -eu
+          if [ -z "${WIX:-}" ]; then choco install wixtoolset --no-progress -y || echo "WiX install issue"; fi
+          cargo install cargo-wix --locked || echo "cargo-wix install issue"
+      - name: CLI installer — cargo-wix .msi (best-effort, untested)
+        shell: bash
+        run: |
+          set -eu
+          VER="${GITHUB_REF_NAME#v}"; VER="${VER:-0.1.0}"
+          cargo wix init --force || echo "wix init issue"
+          mkdir -p _msi
+          if cargo wix --no-build --nocapture --output _msi/ ; then
+            mv _msi/*.msi "dist/sdirstat-${VER}-windows-x86_64.msi"
+          else
+            echo "::warning::cargo-wix CLI MSI failed (untested — adjust wix/main.wxs)"
+          fi
       - name: Desktop — .msi + NSIS .exe (Tauri)
         shell: bash
         # Authenticode: Tauri signs when bundle.windows.certificateThumbprint is set + the cert is in
