@@ -136,7 +136,9 @@ jobs:
           VER="${GITHUB_REF_NAME#v}"; VER="${VER:-0.1.0}"
           cargo install tauri-cli --version "^2" --locked
           mkdir -p desktop/binaries
-          cp "dist/sdirstat-${VER}-macos-universal" desktop/binaries/sdirstat-universal-apple-darwin
+          # A universal Tauri build compiles each arch separately and needs a per-arch sidecar.
+          cp target/x86_64-apple-darwin/release/sdirstat  desktop/binaries/sdirstat-x86_64-apple-darwin
+          cp target/aarch64-apple-darwin/release/sdirstat desktop/binaries/sdirstat-aarch64-apple-darwin
           ( cd desktop && cargo tauri build --target universal-apple-darwin --bundles dmg )
           cp desktop/target/universal-apple-darwin/release/bundle/dmg/*.dmg \
              "dist/sdirstat-desktop-${VER}-macos-universal.dmg" || echo "dmg skipped"
