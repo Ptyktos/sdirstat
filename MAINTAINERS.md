@@ -4,7 +4,7 @@
 |---|---|---|
 | Clay Townsend | clay@twn.systems | Everything — backend, GUI, releases |
 
-Repository: `twn/RnD/sdirstat` on the TWN GitLab.
+Repository: https://github.com/Ptyktos/sdirstat
 
 ## Scope
 
