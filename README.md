@@ -39,17 +39,9 @@ browser). For a fully native window instead, install the [desktop app](desktop/)
 
 ## Why / How
 
-Filesystem analysis tools are either interactive GUI apps (Baobab, QDirStat, Filelight) or headless scripts that dump flat numbers. sdirstat is both: the **same scan** produces a GUI view, a cache file for QDirStat, a JSON tree, and a CLI total — no re-scan, no adapter. The directory tree is a **Web**: each node carries its own `st_blocks`, adjacency is dir → children, and a single reverse-pass fold (`subtree = own + Σ children`) computes every output from the same structure. QDirStat cache output means it slots into existing workflows without replacing the visualiser.
+Filesystem analysis tools are either interactive GUI apps (Baobab, QDirStat, Filelight) or headless scripts that dump flat numbers. 
 
-## Related projects
-
-| project | what |
-|---|---|
-| [qwalk](https://gitlab.tas.twn.network/twn/RnD/qwalk) | Indexed filesystem search and code grep |
-| [cerialize](https://gitlab.tas.twn.network/twn/RnD/collapse_wire) | Zero-copy, zero-dep serialization — columnar wire format |
-| [pdffold](https://gitlab.tas.twn.network/twn/RnD/pdffold) | PDF → Markdown, zero dependencies |
-| [webfold](https://gitlab.tas.twn.network/twn/RnD/webfold) | HTML / WARC / PDF → Markdown |
-| [chunkfold](https://gitlab.tas.twn.network/twn/RnD/chunkfold) | Chunking as coordinate read |
+sdirstat is both: the **same scan** produces a GUI view, a cache file for QDirStat, a JSON tree, and a CLI total — no re-scan, no adapter. The directory tree is a **Web**: each node carries its own `st_blocks`, adjacency is dir → children, and a single reverse-pass fold (`subtree = own + Σ children`) computes every output from the same structure. QDirStat cache output means it slots into existing workflows without replacing the visualiser.
 
 ## Releases & verification
 
