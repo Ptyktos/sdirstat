@@ -1,0 +1,114 @@
+name: 🐛 Bug report
+description: Something in sdirstat doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please **don't file security vulnerabilities here** — follow
+        [SECURITY.md](https://github.com/Ptyktos/sdirstat/blob/main/SECURITY.md) (email) instead.
+        Search [existing issues](https://github.com/Ptyktos/sdirstat/issues?q=is%3Aissue) first.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / build
+      description: A release tag (e.g. `v0.1.0`), or `git rev-parse --short HEAD` if built from source.
+      placeholder: "v0.1.0  /  a800a86"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Debian/Ubuntu .deb (CLI)
+        - Portable binary (glibc)
+        - Static musl binary
+        - AppImage
+        - Desktop app (.deb / .dmg / .msi)
+        - cargo build / from source
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options: [Linux, macOS, Windows, Other]
+    validations:
+      required: true
+
+  - type: input
+    id: os_detail
+    attributes:
+      label: OS version & architecture
+      placeholder: "Debian 13 trixie, x86_64  /  macOS 15 arm64  /  Windows 11"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which interface?
+      options:
+        - CLI scan (HTML report — default)
+        - "`--cache` (QDirStat cache)"
+        - "`--json`"
+        - "`--total`"
+        - "`serve` (web GUI in a browser)"
+        - "`gui` (standalone app window)"
+        - Native desktop app (Tauri)
+        - "`install-desktop` / packaging"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Command & steps to reproduce
+      description: The exact command line and what you did. The scanned path (or a similar one) helps.
+      placeholder: |
+        $ sdirstat /srv --cache -o srv.cache
+        1. …
+        2. …
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior (output / error)
+      description: Paste the full output. For the GUI, the terminal/stderr and any browser console error.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: target
+    attributes:
+      label: Scan target details (it's a filesystem tool)
+      description: Anything unusual about what you scanned — approx entry count, filesystem type, network mount, huge directory, lots of symlinks/hardlinks, sparse files, permissions.
+      placeholder: "~1.3M entries, ext4; or: an NFS mount; or: a directory with deep symlink loops"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true
+        - label: This is **not** a security vulnerability (those go to SECURITY.md, not here).
+          required: true
