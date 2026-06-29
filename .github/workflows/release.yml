@@ -186,11 +186,19 @@ jobs:
         with:
           subject-path: 'dist/*'
 
-      - name: Cut the GitHub Release
+      - name: Cut or update the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+          set -eu
+          # Idempotent: if the release already exists (e.g. pre-created in the UI, or a re-run),
+          # upload/overwrite its assets instead of failing on `create`.
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "release ${GITHUB_REF_NAME} exists — uploading assets (--clobber)"
+            gh release upload "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
