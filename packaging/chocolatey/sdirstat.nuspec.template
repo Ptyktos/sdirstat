@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Template: publish.yml replaces __VERSION__ at pack time. -->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>sdirstat</id>
+    <version>__VERSION__</version>
+    <title>sdirstat</title>
+    <authors>Clay Townsend</authors>
+    <owners>Ptyktos</owners>
+    <projectUrl>https://github.com/Ptyktos/sdirstat</projectUrl>
+    <projectSourceUrl>https://github.com/Ptyktos/sdirstat</projectSourceUrl>
+    <packageSourceUrl>https://github.com/Ptyktos/sdirstat/tree/main/packaging/chocolatey</packageSourceUrl>
+    <docsUrl>https://ptyktos.github.io/sdirstat/</docsUrl>
+    <bugTrackerUrl>https://github.com/Ptyktos/sdirstat/issues</bugTrackerUrl>
+    <licenseUrl>https://github.com/Ptyktos/sdirstat/blob/main/LICENSE-MIT</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <iconUrl>https://raw.githubusercontent.com/Ptyktos/sdirstat/main/desktop/icons/128x128.png</iconUrl>
+    <tags>sdirstat disk-usage treemap du qdirstat filesystem cli admin</tags>
+    <summary>Parallel disk-usage analyzer with a treemap/sunburst GUI; a zero-dep QDirStat cache writer.</summary>
+    <description>
+sdirstat is a headless filesystem indexer and disk-usage analyzer. One parallel scan produces a
+QDirStat cache file, a nested JSON tree, a self-contained HTML treemap report, or a live web GUI
+(treemap / sunburst / file-type stats). It is the zero-dependency Rust replacement for the Perl
+`qdirstat-cache-writer`.
+
+This package installs the `sdirstat` command-line tool. The native desktop app is distributed
+separately (MSI/winget). Release binaries are checksummed, cosign-signed, and carry SLSA provenance.
+    </description>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

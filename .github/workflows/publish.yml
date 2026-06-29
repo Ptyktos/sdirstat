@@ -1,0 +1,79 @@
+# Publish workflow — push a published release to the package managers. Each channel is gated on its
+# secret: with the secret absent the job logs a warning and exits 0 (inert), so this is safe to land
+# before any credentials exist. apt is handled in pages.yml (it deploys to the Pages site). Only the
+# first-party actions/checkout is used; winget uses Microsoft's wingetcreate, choco uses the choco CLI.
+#
+# Required secrets (see docs/PUBLISHING.md):
+#   CARGO_REGISTRY_TOKEN   crates.io API token
+#   WINGET_TOKEN           a PAT with access to your winget-pkgs fork
+#   CHOCO_API_KEY          chocolatey.org push API key
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "version without the leading v (defaults to the triggering release tag)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  crates-io:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::warning::CARGO_REGISTRY_TOKEN not set — skipping crates.io publish"; exit 0
+          fi
+          cargo publish --locked
+
+  chocolatey:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Pack & push
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+        run: |
+          if (-not $env:CHOCO_API_KEY) { Write-Warning "CHOCO_API_KEY not set — skipping chocolatey"; exit 0 }
+          $ver = ("${{ github.event.release.tag_name }}${{ github.event.inputs.version }}").TrimStart('v')
+          $repo = "${{ github.repository }}"
+          $exe  = "https://github.com/$repo/releases/download/v$ver/sdirstat-$ver-windows-x86_64.exe"
+          # checksum from the release SHA256SUMS
+          $sums = (Invoke-WebRequest "https://github.com/$repo/releases/download/v$ver/SHA256SUMS").Content
+          $sha  = ($sums -split "`n" | Select-String "sdirstat-$ver-windows-x86_64.exe" | ForEach-Object { ($_ -split '\s+')[0] })
+          if (-not $sha) { throw "could not find the .exe checksum in SHA256SUMS" }
+          cd packaging/chocolatey
+          (Get-Content sdirstat.nuspec.template) -replace '__VERSION__', $ver | Set-Content sdirstat.nuspec
+          (Get-Content tools/chocolateyInstall.ps1.template) `
+            -replace '__VERSION__', $ver -replace '__URL__', $exe -replace '__SHA256__', $sha `
+            | Set-Content tools/chocolateyInstall.ps1
+          choco pack
+          choco push (Get-ChildItem *.nupkg).Name --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+
+  winget:
+    runs-on: windows-latest
+    steps:
+      - name: Submit to winget-pkgs (wingetcreate)
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if (-not $env:WINGET_TOKEN) { Write-Warning "WINGET_TOKEN not set — skipping winget"; exit 0 }
+          $ver = ("${{ github.event.release.tag_name }}${{ github.event.inputs.version }}").TrimStart('v')
+          $repo = "${{ github.repository }}"
+          # The desktop MSI is the winget installer (it bundles the CLI). First-ever submission must be
+          # done manually with `wingetcreate new` (see docs/PUBLISHING.md); this updates it thereafter.
+          $msi = "https://github.com/$repo/releases/download/v$ver/sdirstat-desktop-$ver-windows-x86_64.msi"
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          .\wingetcreate.exe update Ptyktos.sdirstat --version $ver --urls "$msi" --submit --token $env:WINGET_TOKEN

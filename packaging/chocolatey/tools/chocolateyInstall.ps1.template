@@ -1,0 +1,12 @@
+$ErrorActionPreference = 'Stop'
+# Template: publish.yml replaces __VERSION__ / __URL__ / __SHA256__ at pack time.
+$toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+
+# Downloads the portable CLI exe from the official GitHub Release and verifies its SHA256.
+# Chocolatey auto-creates a `sdirstat` shim on PATH for the .exe placed in tools\.
+Get-ChocolateyWebFile `
+  -PackageName  'sdirstat' `
+  -FileFullPath (Join-Path $toolsDir 'sdirstat.exe') `
+  -Url64bit     '__URL__' `
+  -Checksum64   '__SHA256__' `
+  -ChecksumType64 'sha256'

@@ -1,0 +1,18 @@
+VERIFICATION
+
+sdirstat is maintained at https://github.com/Ptyktos/sdirstat and is published by its maintainers.
+
+This package does not embed a binary. At install time it downloads the portable CLI executable from
+the official GitHub Release and verifies its SHA256 checksum (baked into tools\chocolateyInstall.ps1):
+
+  https://github.com/Ptyktos/sdirstat/releases
+
+To verify independently:
+  1. Download  sdirstat-<version>-windows-x86_64.exe  from the release above.
+  2. Compute its SHA256 and compare it to the value in the release SHA256SUMS file, and to the
+     Checksum64 in tools\chocolateyInstall.ps1 — all three must match.
+
+The release artifacts are additionally signed with cosign (keyless, Fulcio/Rekor) and carry SLSA
+build provenance. See docs/SIGNING.md and RELEASE.md in the repository for the verification commands.
+
+LICENSE: MIT OR Apache-2.0 — https://github.com/Ptyktos/sdirstat/blob/main/LICENSE-MIT
