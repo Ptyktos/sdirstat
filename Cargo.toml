@@ -1,6 +1,6 @@
 [package]
 name = "sdirstat"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Headless filesystem indexer — the directory tree as a Web (node = own st_blocks, adj = dir→children), the size fold = the B/U accumulator (preduce), the parallel walk = pmapAt (schedule-free). Emits the QDirStat cache format and a nested JSON tree (two fromTerm out-maps over one scanned Web). The zero-dep Rust replacement for the Perl qdirstat-cache-writer."
