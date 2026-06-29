@@ -1,6 +1,6 @@
 [package]
 name = "sdirstat"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "A fast, parallel disk-usage analyzer with an interactive treemap/sunburst GUI. From one scan it emits a self-contained HTML report, a QDirStat cache file, a JSON tree, or a grand total. Zero runtime dependencies; byte-exact with du."
