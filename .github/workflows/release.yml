@@ -7,8 +7,9 @@
 # macOS/Windows installers is scaffolded but inert until you add the certs as repo secrets (see
 # docs/SIGNING.md).
 #
-# TESTED STATUS: only the Linux jobs have actually run. Windows/macOS jobs are written to the standard
-# Tauri + cargo pattern but unexecuted on a real runner — expect to iterate on the first tag.
+# TESTED STATUS: linux and windows have both published successfully. macos is disabled (`if: false`
+# on the job, dropped from `release`'s `needs`) until Apple Developer signing certs are set up —
+# it built fine once Tauri's codesign step was fixed, but ships an unsigned, Gatekeeper-flagged .dmg.
 name: release
 
 on:
@@ -105,8 +106,11 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with: { name: windows, path: dist/* }
 
-  # UNTESTED — no macOS host was available locally. Universal (Intel + Apple Silicon) .dmg.
+  # DISABLED for now: no Apple Developer certs yet, so this ships an unsigned .dmg that Gatekeeper
+  # will flag. Flip `if: false` off once docs/SIGNING.md's APPLE_* secrets are configured, and add
+  # `macos` back to the `release` job's `needs` below.
   macos:
+    if: false
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -157,7 +161,7 @@ jobs:
         with: { name: macos, path: dist/* }
 
   release:
-    needs: [linux, windows, macos]
+    needs: [linux, windows] # macos dropped from needs while its job is disabled (if: false above)
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
