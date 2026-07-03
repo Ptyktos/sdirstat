@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-03
+
 ### Added
 - **Native desktop app** (`desktop/`, Tauri): wraps the existing GUI by launching the `sdirstat`
   binary as a sidecar (`serve` on a loopback port) and opening a native window. Builds to `.deb`
@@ -27,10 +29,15 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 - Dual-licensed **MIT OR Apache-2.0** (added `LICENSE-APACHE` to match `Cargo.toml`).
 
+### Fixed
+- **macOS universal Tauri bundle**: the `.dmg` build was failing in CI because the release job only
+  staged the per-arch sidecars, not the `lipo`'d universal binary Tauri's bundler expects for a
+  `universal-apple-darwin` target. `v0.1.0`'s release run never published assets as a result — this
+  is effectively the first release to actually ship binaries, including Windows.
+
 ### Notes
-- The Windows and macOS desktop installer builds are written but **not yet executed on a real
-  runner** — expect to iterate on the first tagged release.
 - Code signing (macOS Developer ID + notarization, Windows Authenticode) is scaffolded in CI but
   inert until the certificates are provided as repository secrets (see `docs/SIGNING.md`).
 
-[Unreleased]: https://github.com/Ptyktos/sdirstat/commits/main
+[Unreleased]: https://github.com/Ptyktos/sdirstat/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Ptyktos/sdirstat/releases/tag/v0.1.1
