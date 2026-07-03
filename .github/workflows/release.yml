@@ -133,6 +133,15 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -eu
+          # GitHub Actions sets the env key above even when the secret doesn't exist (empty string,
+          # not unset) — and Tauri's codesign path triggers on the var being *present*, not non-empty,
+          # so it tries to import an empty cert and fails. Unset unconfigured ones so it skips signing.
+          [ -z "${APPLE_CERTIFICATE:-}" ] && unset APPLE_CERTIFICATE
+          [ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ] && unset APPLE_CERTIFICATE_PASSWORD
+          [ -z "${APPLE_SIGNING_IDENTITY:-}" ] && unset APPLE_SIGNING_IDENTITY
+          [ -z "${APPLE_ID:-}" ] && unset APPLE_ID
+          [ -z "${APPLE_PASSWORD:-}" ] && unset APPLE_PASSWORD
+          [ -z "${APPLE_TEAM_ID:-}" ] && unset APPLE_TEAM_ID
           VER="${GITHUB_REF_NAME#v}"; VER="${VER:-0.1.0}"
           cargo install tauri-cli --version "^2" --locked
           mkdir -p desktop/binaries
