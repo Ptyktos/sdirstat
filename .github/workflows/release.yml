@@ -59,13 +59,18 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with: { name: linux, path: dist/* }
 
-  # UNTESTED — no Windows host was available locally. Native MSVC build, WebView2 preinstalled.
+  # Native MSVC build, WebView2 preinstalled. linux+windows verified on v0.1.1; macos disabled below.
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: CLI — sdirstat.exe (native MSVC)
         shell: bash
+        # +crt-static: a plain MSVC build dynamically links vcruntime140.dll, which a stock Windows
+        # install doesn't ship — "code execution cannot proceed" on a clean machine. This binary is
+        # also what gets bundled as the Tauri sidecar below, so the fix covers both.
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
         run: |
           set -eu
           VER="${GITHUB_REF_NAME#v}"; VER="${VER:-0.1.0}"

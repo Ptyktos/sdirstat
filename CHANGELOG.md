@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-04
+
+### Fixed
+- **Windows `VCRUNTIME140.dll was not found`**: the CLI (and the identical binary bundled as the
+  Tauri desktop app's sidecar) dynamically linked the MSVC C runtime, which a stock Windows install
+  doesn't ship. Now built with `-C target-feature=+crt-static`, so it's a true no-install-required
+  portable binary. `v0.1.1`'s Windows binaries hit this on a clean VM — this is the first release
+  verified to actually run on Windows.
+- **macOS job disabled** in the release pipeline (`if: false`) until Developer ID signing certs are
+  configured — an unsigned `.dmg` just gets Gatekeeper-flagged, not worth shipping yet.
+
 ## [0.1.1] - 2026-07-03
 
 ### Added
@@ -39,5 +50,6 @@ All notable changes to this project are documented here. The format follows
 - Code signing (macOS Developer ID + notarization, Windows Authenticode) is scaffolded in CI but
   inert until the certificates are provided as repository secrets (see `docs/SIGNING.md`).
 
-[Unreleased]: https://github.com/Ptyktos/sdirstat/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Ptyktos/sdirstat/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Ptyktos/sdirstat/releases/tag/v0.1.2
 [0.1.1]: https://github.com/Ptyktos/sdirstat/releases/tag/v0.1.1

@@ -4,7 +4,7 @@
 # (`sdirstat serve`) and a native window is pointed at its loopback GUI.
 [package]
 name = "sdirstat-desktop"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Native desktop GUI for sdirstat — an interactive treemap/sunburst disk-usage explorer"
