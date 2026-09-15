@@ -18,6 +18,8 @@ pub mod hash;
 #[doc(hidden)]
 pub mod uring;
 #[doc(hidden)]
+pub mod clean;
+#[doc(hidden)]
 pub mod internal;
 
 use std::path::Path;
