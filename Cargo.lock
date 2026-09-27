@@ -5,3 +5,12 @@ version = 4
 [[package]]
 name = "sdirstat"
 version = "0.1.2"
+
+[[patch.unused]]
+name = "sangdb"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "ruler"
+version = "0.1.0"
+source = "git+https://gitlab.tas.twn.network/twn/ptyktos/ruler.git?branch=main#bb42d5e698d03cdea5f91f9a2a3e308ed7cb1673"

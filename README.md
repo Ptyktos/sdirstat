@@ -63,7 +63,7 @@ sdirstat /srv --json | jq '…'         # a JSON tree for your own tooling
 
 In the GUI you can drill into folders, switch between **treemap / sunburst / file-type** views, sort
 by size, and right-click a file to **Open / Reveal / Copy path / Move to Trash**. There's also a fully
-**native desktop app** (Tauri) — see [`desktop/`](desktop/).
+native desktop app (Tauri) — see [Ptyktos/sdirstat-desktop](https://github.com/Ptyktos/sdirstat-desktop).
 
 ## Features
 

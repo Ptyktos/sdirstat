@@ -61,7 +61,15 @@ jobs:
           choco pack
           choco push (Get-ChildItem *.nupkg).Name --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
 
+  # DISABLED: the winget package (Ptyktos.sdirstat) was submitted using the Tauri desktop
+  # installer's .msi (it bundles the CLI) as the winget artifact. That .msi is now built and
+  # released by Ptyktos/sdirstat-desktop instead, in its own release. WINGET_TOKEN was never
+  # configured (this job was already inert), so nothing that was working stops working -- but
+  # the $msi URL below now points at an artifact this repo's releases no longer contain. Needs
+  # an owner decision: point winget at sdirstat-desktop's release instead (and update
+  # `wingetcreate`'s target there), or drop winget from this repo's automation. Not decided here.
   winget:
+    if: false
     runs-on: windows-latest
     steps:
       - name: Submit to winget-pkgs (wingetcreate)
