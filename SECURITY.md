@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Email **clay@twn.systems** with a description and reproduction steps. Please do **not** open a
+Email **security@ptyktos.com** with a description and reproduction steps. Please do **not** open a
 public issue for security-sensitive reports. We aim to acknowledge within a few business days.
 
 ## Supported versions
