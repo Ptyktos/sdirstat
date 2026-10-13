@@ -39,7 +39,7 @@ jobs:
           cp target/release/sdirstat                           out/sdirstat-linux-x86_64
           cp target/x86_64-unknown-linux-musl/release/sdirstat out/sdirstat-linux-x86_64-musl
           cp dist/*.deb out/ 2>/dev/null || true
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: linux, path: out/* }
 
   macos:
@@ -56,7 +56,7 @@ jobs:
           lipo -create -output out/sdirstat-macos-universal \
             target/x86_64-apple-darwin/release/sdirstat \
             target/aarch64-apple-darwin/release/sdirstat
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: macos, path: out/* }
 
   windows:
@@ -90,5 +90,5 @@ jobs:
             echo "::warning::cargo-wix MSI failed (untested on a real runner — adjust wix/main.wxs)"
           fi
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: windows, path: out/* }

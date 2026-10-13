@@ -38,7 +38,7 @@ jobs:
           mkdir -p dist
           cp target/release/sdirstat                           "dist/sdirstat-${VER}-linux-x86_64"
           cp target/x86_64-unknown-linux-musl/release/sdirstat "dist/sdirstat-${VER}-linux-x86_64-musl"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: linux, path: dist/* }
 
   # Native MSVC build, WebView2 preinstalled. linux+windows verified on v0.1.1; macos disabled below.
@@ -76,7 +76,7 @@ jobs:
           else
             echo "::warning::cargo-wix CLI MSI failed (untested — adjust wix/main.wxs)"
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: windows, path: dist/* }
 
   # DISABLED for now: unexecuted on a real runner. Flip `if: false` off once exercised, and add
@@ -97,7 +97,7 @@ jobs:
           lipo -create -output "dist/sdirstat-${VER}-macos-universal" \
             target/x86_64-apple-darwin/release/sdirstat \
             target/aarch64-apple-darwin/release/sdirstat
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: macos, path: dist/* }
 
   release:
