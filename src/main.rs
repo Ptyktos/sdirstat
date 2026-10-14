@@ -753,7 +753,7 @@ sdirstat — parallel disk-usage analyzer (treemap/sunburst web GUI + QDirStat c
 USAGE
   sdirstat <path> [options]      scan a directory (default: writes report.html)
   sdirstat serve [-p PORT]       live web GUI at http://127.0.0.1:PORT (default 8080)
-  sdirstat gui                   open the GUI as a standalone desktop app window
+  sdirstat clean [--apply]       scan & reclaim system, package, and browser caches (BleachBit/Mole)
   sdirstat install-desktop       add a clickable \"sdirstat\" app to your menu (Linux, no root)
   sdirstat uninstall-desktop     remove that menu entry
 
@@ -792,6 +792,7 @@ fn main() {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
+            "clean" => mode = "clean",
             "serve" => mode = "serve",
             "gui" => mode = "gui",
             "install-desktop" => mode = "install-desktop",
@@ -835,6 +836,28 @@ fn main() {
         if let Err(e) = uninstall_desktop() {
             eprintln!("uninstall-desktop failed: {e}");
             std::process::exit(1);
+        }
+        return;
+    }
+    if mode == "clean" {
+        use sdirstat::clean::{scan_cleanable, execute_clean, format_bytes};
+        println!("=== SDIRSTAT SYSTEM CLEANER (BleachBit & Mole Subsumption) ===");
+        let t0 = std::time::Instant::now();
+        let report = scan_cleanable();
+        let scan_duration = t0.elapsed();
+        
+        println!("\nFound {} reclaimable items totaling {} in {:.2?}:\n", report.total_files, format_bytes(report.total_bytes), scan_duration);
+        for item in &report.items {
+            println!("  [{}] {:>10}  {}", item.category.name(), format_bytes(item.bytes), item.path.display());
+        }
+
+        let is_dry_run = !args.contains(&"--apply".to_string()) && !args.contains(&"--yes".to_string());
+        if is_dry_run {
+            println!("\n[DRY RUN] No files modified. Re-run with `sdirstat clean --apply` to execute space reclamation.");
+        } else {
+            println!("\n[APPLYING] Reclaiming disk space...");
+            let result = execute_clean(&report, false);
+            println!("✔ Reclaimed {} across {} items ({} errors).", format_bytes(result.reclaimed_bytes), result.deleted_items, result.errors.len());
         }
         return;
     }
